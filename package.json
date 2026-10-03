@@ -1,0 +1,12 @@
+{
+  "name": "glava",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "serve": "python3 -m http.server 8767"
+  },
+  "devDependencies": {
+    "@diffusionstudio/piper-wasm": "1.0.0",
+    "onnxruntime-web": "1.30.0"
+  }
+}
