@@ -84,6 +84,7 @@ async function boot() {
   render();
   store.on(() => { render(); checkMedals(); });
   window.addEventListener('hashchange', () => { render(); scrollTo(0, 0); });
+  window.addEventListener('glava-files', () => render());
   // A day that rolls over while the app is open: redraw when it comes back to the front.
   let shown = today();
   document.addEventListener('visibilitychange', () => { if (!document.hidden && shown !== today()) { shown = today(); render(); } });
