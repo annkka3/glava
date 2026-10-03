@@ -3,7 +3,7 @@
 import { $, html, today, count, PL, uid, fmtDay, norm } from '../util.js';
 import { store } from '../store.js';
 import * as M from '../model.js';
-import { files, ACCEPT } from '../files.js';
+import { files } from '../files.js';
 import { ICON, cover, bar, openSheet, updateSheet, closeSheet, toast } from '../ui.js';
 
 export const KIND = { novel: 'Роман', novella: 'Повесть', story: 'Рассказ', stories: 'Сборник рассказов', play: 'Пьеса', poetry: 'Поэзия', epic: 'Эпос', nonfiction: 'Нон-фикшн', series: 'Цикл' };
@@ -89,7 +89,7 @@ ${p && b.status !== 'read' ? html`<p class="small muted">${p.late ? 'Срок п
 </div>
 ${hasFile ? html`<div class="row"><button class="btn quiet" data-act="detach">${ICON.trash}Убрать файл с этого устройства</button></div>` : ''}
 <div class="row"><button class="btn quiet" data-act="edit">${ICON.edit}Изменить</button><button class="btn danger" data-act="delete">${ICON.trash}Удалить</button></div>
-<input type="file" id="bookFile" accept="${ACCEPT}" hidden>`;
+<input type="file" id="bookFile" hidden>`;
 }
 
 export function openBook(id) {
@@ -196,7 +196,7 @@ export function openAdd() {
 ${form()}
 <div class="seg" role="group" aria-label="Статус" id="fStatus">${[['want', 'Хочу прочитать'], ['reading', 'Читаю сейчас']].map(([k, v], i) => html`<button class="${i ? '' : 'on'}" data-act="pick" data-s="${k}">${v}</button>`)}</div>
 <div class="row"><button class="btn primary" data-act="save">Добавить</button></div>
-<input type="file" id="newFile" accept="${ACCEPT}" hidden>`,
+<input type="file" id="newFile" hidden>`,
     acts: {
       pick: el => { for (const x of el.parentElement.children) x.classList.toggle('on', x === el); },
       file: () => $('#newFile').click(),

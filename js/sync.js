@@ -165,7 +165,7 @@ export async function start() {
   // initializeAuth (not getAuth) keeps the popup sign-in machinery, and its Google script, out of the app.
   auth = fb.initializeAuth(app, { persistence: [fb.indexedDBLocalPersistence, fb.browserLocalPersistence] });
   auth.languageCode = 'ru';
-  fs = fb.initializeFirestore(app, { localCache: fb.memoryLocalCache() });
+  fs = fb.initializeFirestore(app, { localCache: fb.memoryLocalCache(), ignoreUndefinedProperties: true });
   account.render = render;
   Object.assign(account.acts, acts);
   document.addEventListener('change', e => { if (e.target.id === 'ritmItem') store.setSettings({ ritm: { item: e.target.value } }); });

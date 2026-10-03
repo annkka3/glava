@@ -22,5 +22,3 @@ export const files = {
   },
   async remove(id) { await db.delFile(id); ids.delete(id); },
 };
-
-export const ACCEPT = '.epub,.fb2,.fbz,.zip,.mobi,.azw3,application/epub+zip';
