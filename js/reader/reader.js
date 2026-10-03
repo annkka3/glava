@@ -30,6 +30,7 @@ const FONTS = {
 const GAPS = { narrow: '4%', normal: '7%', wide: '11%' };
 const RICON = {
   list: raw('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h9"/></svg>'),
+  mark: raw('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h10v16l-5-3.6L7 20z"/></svg>'),
   prev: raw('<svg viewBox="0 0 24 24" aria-hidden="true" style="fill:currentColor;stroke:none"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg>'),
   next: raw('<svg viewBox="0 0 24 24" aria-hidden="true" style="fill:currentColor;stroke:none"><path d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg>'),
 };
@@ -132,7 +133,8 @@ const shell = b => html`
 <div class="r-bar r-top">
   <button data-r="close" aria-label="Закрыть книгу">${ICON.back}</button>
   <div class="ttl">${b.title}</div>
-  <button data-r="toc" aria-label="Оглавление">${RICON.list}</button>
+  <button data-r="mark" id="rMark" aria-label="Закладка" aria-pressed="false">${RICON.mark}</button>
+  <button data-r="toc" aria-label="Оглавление, закладки и поиск">${RICON.list}</button>
   <button data-r="look" aria-label="Настройки чтения" style="font-family:var(--f-display);font-size:21px;font-weight:600">Аа</button>
   <button data-r="listen" aria-label="Слушать">${ICON.ear}</button>
 </div>
@@ -166,6 +168,9 @@ function paint() {
   if (!R || !R.loc) return;
   const f = R.loc.fraction || 0, page = Math.min(R.pages, Math.floor(f * R.pages) + 1);
   $('#rSlider').value = Math.round(f * 1000);
+  const marked = markAt(f) >= 0;
+  $('#rMark').classList.toggle('on', marked);
+  $('#rMark').setAttribute('aria-pressed', String(marked));
   $('#rFoot').textContent = `${page} из ${R.pages}`;
   $('#rPage').textContent = `стр. ${page} из ${R.pages} · ${Math.round(f * 100)} %`;
   const t = R.loc.time;
@@ -363,22 +368,73 @@ function openLook() {
   });
 }
 
+// A bookmark belongs to the page it was set on: anything within a third of a page counts as "here".
+function markAt(f) {
+  const marks = store.books.get(R.id).marks || [], near = 0.34 / R.pages;
+  return marks.findIndex(m => Math.abs(m.f - f) <= near);
+}
+
+function toggleMark() {
+  if (!R.loc) return;
+  const b = store.books.get(R.id), marks = [...(b.marks || [])], f = R.loc.fraction || 0, i = markAt(f);
+  if (i >= 0) marks.splice(i, 1);
+  else {
+    const here = R.loc.range ? R.loc.range.toString().replace(/\s+/g, ' ').trim().slice(0, 90) : '';
+    marks.push({ cfi: R.loc.cfi, f, at: today(), label: (R.loc.tocItem && R.loc.tocItem.label || '').trim(), text: here });
+    marks.sort((a, c) => a.f - c.f);
+  }
+  store.patch('books', R.id, { marks });
+  paint();
+  toast(i >= 0 ? 'Закладка снята' : 'Закладка поставлена');
+}
+
+async function runSearch(query) {
+  const box = $('#rFound');
+  if (!box || !R) return;
+  R.view.clearSearch();
+  query = query.trim();
+  if (query.length < 2) { box.replaceChildren(); return; }
+  box.textContent = 'Ищу…';
+  const token = R.searching = {}, found = [];
+  try {
+    for await (const res of R.view.search({ query })) {
+      if (!R || R.searching !== token) return;
+      if (res === 'done') break;
+      for (const it of res.subitems || []) if (found.length < 80) found.push({ cfi: it.cfi, excerpt: it.excerpt || {}, label: (res.label || '').trim() });
+    }
+  } catch (e) { /* a chapter that cannot be searched is skipped */ }
+  if (!R || !$('#rFound')) return;
+  R.found = found;
+  setHTML($('#rFound'), found.length
+    ? html`<p class="tiny muted">${found.length >= 80 ? 'Первые 80 мест' : `Найдено мест: ${found.length}`}</p>${found.map((it, i) => html`<button data-act="found" data-i="${i}"><span class="tiny muted">${it.label}</span><span style="display:block">${it.excerpt.pre || ''}<b style="color:var(--accent)">${it.excerpt.match || ''}</b>${it.excerpt.post || ''}</span></button>`)}`
+    : html`<p class="small muted">Ничего не нашлось.</p>`);
+}
+
 function openToc() {
   const flat = [];
   const walk = (items, depth) => { for (const it of items || []) { flat.push({ ...it, depth }); walk(it.subitems, depth + 1); } };
   walk(R.view.book.toc, 0);
   const cur = R.loc && R.loc.tocItem ? R.loc.tocItem.href : '';
+  const marks = store.books.get(R.id).marks || [];
   const mine = [...store.quotes].filter(([, q]) => q.book === R.id && q.cfi);
+  const page = f => Math.min(R.pages, Math.floor(f * R.pages) + 1);
   openSheet({
     title: 'Оглавление',
-    body: html`<div class="toc">${flat.map((it, i) => html`<button class="${it.href === cur ? 'cur' : ''}" data-act="go" data-i="${i}" style="padding-left:${it.depth * 16}px">${(it.label || '').trim() || 'Без названия'}</button>`)}
-${flat.length ? '' : html`<p class="muted">В этой книге нет оглавления.</p>`}</div>
-${mine.length ? html`<section class="stack" style="gap:8px"><p class="eyebrow">Цитаты</p><div class="toc">${mine.map(([qid, q]) => html`<button data-act="quote" data-id="${qid}"><span style="font-family:var(--f-display);font-size:18px;line-height:1.3">${q.text.length > 140 ? q.text.slice(0, 140) + '…' : q.text}</span></button>`)}</div></section>` : ''}`,
+    onClose: () => { if (R) { R.searching = null; R.view.clearSearch(); } },
+    body: html`<label class="search">${ICON.search}<input id="rQ" type="search" placeholder="Найти в книге" autocomplete="off" enterkeyhint="search" aria-label="Поиск по книге"></label>
+<div class="toc" id="rFound"></div>
+${marks.length ? html`<section class="stack" style="gap:4px"><p class="eyebrow">Закладки</p><div class="toc">${marks.map((m, i) => html`<button data-act="mark" data-i="${i}"><span class="tiny muted">стр. ${page(m.f)}${m.label ? ' · ' + m.label : ''}</span><span style="display:block">${m.text || 'Без текста'}</span></button>`)}</div></section>` : ''}
+<section class="stack" style="gap:4px"><p class="eyebrow">Главы</p><div class="toc">${flat.map((it, i) => html`<button class="${it.href === cur ? 'cur' : ''}" data-act="go" data-i="${i}" style="padding-left:${it.depth * 16}px">${(it.label || '').trim() || 'Без названия'}</button>`)}
+${flat.length ? '' : html`<p class="muted">В этой книге нет оглавления.</p>`}</div></section>
+${mine.length ? html`<section class="stack" style="gap:4px"><p class="eyebrow">Цитаты</p><div class="toc">${mine.map(([qid, q]) => html`<button data-act="quote" data-id="${qid}"><span style="font-family:var(--f-display);font-size:18px;line-height:1.3">${q.text.length > 140 ? q.text.slice(0, 140) + '…' : q.text}</span></button>`)}</div></section>` : ''}`,
     acts: {
       go: el => { const it = flat[+el.dataset.i]; closeSheet(); if (it && it.href) R.view.goTo(it.href); },
+      mark: el => { const m = marks[+el.dataset.i]; closeSheet(); if (m) R.view.goTo(m.cfi); },
       quote: el => { const q = store.quotes.get(el.dataset.id); closeSheet(); if (q) R.view.goTo(q.cfi); },
+      found: el => { const it = R.found && R.found[+el.dataset.i]; closeSheet(); if (it) R.view.goTo(it.cfi); },
     },
   });
+  $('#sheet').onchange = e => { if (e.target.id === 'rQ') runSearch(e.target.value); };
 }
 
 // ---------- open / close ----------
@@ -386,6 +442,7 @@ ${mine.length ? html`<section class="stack" style="gap:8px"><p class="eyebrow">�
 const acts = {
   close: () => close(),
   toc: () => openToc(),
+  mark: () => toggleMark(),
   look: () => openLook(),
   listen: () => (R.speaker ? stopListening() : listen()),
   quote: () => {

@@ -40,6 +40,8 @@ html{-webkit-text-size-adjust:100%;background:var(--bg);height:100%}
 body{margin:0;min-height:100%;color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.45;font-variant-numeric:lining-nums;-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent;overscroll-behavior-y:none;
   background-color:var(--bg);
   background-image:repeating-linear-gradient(0deg,var(--weave-a) 0 1px,transparent 1px 3px),repeating-linear-gradient(90deg,var(--weave-b) 0 1px,transparent 1px 3px)}
+/* As a home-screen app the page runs under the status bar, whose text is white: keep a dark band behind it in every theme. */
+body::before{content:"";position:fixed;top:0;left:0;right:0;height:env(safe-area-inset-top,0px);background:#0C241E;z-index:50;pointer-events:none}
 button,input,select,textarea{font:inherit;color:inherit}
 button{cursor:pointer;background:none;border:0;padding:0}
 button:disabled{cursor:default;opacity:.45}
@@ -213,6 +215,7 @@ dialog.sheet::backdrop{background:var(--backdrop)}
 .r-top{top:0;padding:calc(6px + env(safe-area-inset-top,0px)) 8px 6px;display:flex;align-items:center;gap:2px;border-bottom:1px solid var(--r-line)}
 .r-top .ttl{flex:1 1 auto;min-width:0;font-family:var(--f-display);font-style:italic;font-weight:600;font-size:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px}
 .r-top button,.r-listen button.ic{width:44px;height:44px;flex:0 0 44px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--r-accent)}
+.r-top button.on svg{fill:currentColor}
 .r-top svg,.r-listen .ic svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .r-bottom{bottom:0;padding:10px 20px calc(10px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--r-line);display:flex;flex-direction:column;gap:6px}
 .r-bottom input[type=range]{width:100%;accent-color:var(--r-accent);height:28px;margin:0}
