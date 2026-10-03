@@ -10,6 +10,7 @@ import { applyTheme } from '../screens/settings.js';
 import { makeBook } from '../../vendor/foliate-js/view.js';
 import { Overlayer } from '../../vendor/foliate-js/overlayer.js';
 import { Speaker, unlock } from './speak.js';
+import { scan, partAt } from './omnibus.js';
 
 const THEMES = {
   paper: { name: 'Бумага', bg: '#F4EEDD', fg: '#1E2B26', muted: '#5F6A63', accent: '#7A5C12', line: 'rgba(122,92,18,.3)', dark: false },
@@ -39,7 +40,9 @@ const FB2_GENRE = [[/det|crime/, 'Детектив'], [/thriller/, 'Трилле
   [/child/, 'Детская литература'], [/psy/, 'Психология'], [/business|economics|banking/, 'Бизнес'], [/philosophy/, 'Философия'], [/sci_history|history/, 'История'],
   [/biograph|memoir/, 'Мемуары и биографии'], [/antique/, 'Эпос и древняя литература'], [/sci_|science/, 'Наука'], [/prose|love/, 'Современная проза']];
 
-let R = null; // the open book: {id, view, max, pages, acc, …}
+// The open file. R.host is the record that owns the file; R.id is the record being read right now:
+// the same one for an ordinary book, or one of the works inside a collected volume (R.part).
+let R = null;
 
 const themeOf = r => THEMES[r.theme] || THEMES[document.documentElement.dataset.theme === 'light' ? 'paper' : 'night'];
 const fontOf = r => FONTS[r.font] || FONTS.literata;
@@ -84,8 +87,18 @@ async function importFile(file, bookId) {
     const genre = (FB2_GENRE.find(([re]) => re.test(subjects)) || [])[1];
     store.put('books', id, { title, author, kind: 'novel', genres: genre ? [genre] : [], status: 'want', custom: true, added: today(), pages, chars, fmt: 'e', cv, touched: Date.now() });
   }
-  toast(cur ? 'Файл добавлен к книге' : 'Книга добавлена в библиотеку');
+  let found = null;
+  try { found = await scan(id, book); } catch (e) { /* no usable contents: an ordinary book */ }
+  if (found && found.linked.length) toast(`В файле найдено произведений из твоей библиотеки: ${found.linked.length}`);
+  else toast(cur ? 'Файл добавлен к книге' : 'Книга добавлена в библиотеку');
   return id;
+}
+
+/** Look again for separate works inside a file that is already in the library. */
+async function rescan(id) {
+  const file = await files.get(id);
+  if (!file) return null;
+  return scan(id, await makeBook(file));
 }
 
 // ---------- look ----------
@@ -166,13 +179,17 @@ function chrome(on) {
 
 function paint() {
   if (!R || !R.loc) return;
-  const f = R.loc.fraction || 0, page = Math.min(R.pages, Math.floor(f * R.pages) + 1);
+  const f = R.loc.fraction || 0, part = R.part;
+  // inside a collected volume the numbers are those of the work, not of the whole file
+  const local = part ? Math.min(1, Math.max(0, (f - part.from) / (part.to - part.from))) : f;
+  const pages = part ? (store.books.get(R.id).pages || Math.max(1, Math.round(R.pages * (part.to - part.from)))) : R.pages;
+  const page = Math.min(pages, Math.floor(local * pages) + 1);
   $('#rSlider').value = Math.round(f * 1000);
   const marked = markAt(f) >= 0;
   $('#rMark').classList.toggle('on', marked);
   $('#rMark').setAttribute('aria-pressed', String(marked));
-  $('#rFoot').textContent = `${page} из ${R.pages}`;
-  $('#rPage').textContent = `стр. ${page} из ${R.pages} · ${Math.round(f * 100)} %`;
+  $('#rFoot').textContent = `${page} из ${pages}`;
+  $('#rPage').textContent = `стр. ${page} из ${pages} · ${Math.round(local * 100)} %`;
   const t = R.loc.time;
   const left = t && t.total > 0 ? R.pages * (1 - f) * t.section / t.total : 0;
   const label = R.loc.tocItem && R.loc.tocItem.label ? R.loc.tocItem.label.trim() : '';
@@ -193,7 +210,13 @@ function flush() {
 function save() {
   if (!R || !R.loc) return;
   flush();
-  store.patch('books', R.id, { prog: { f: R.loc.fraction || 0, cfi: R.loc.cfi, max: R.max, t: Date.now() }, touched: Date.now() });
+  const f = R.loc.fraction || 0, t = Date.now();
+  R.hostMax = Math.max(R.hostMax, f);
+  store.patch('books', R.host, { prog: { f, cfi: R.loc.cfi, max: R.hostMax, t }, touched: t });
+  if (R.part) {
+    const p = R.part, at = x => Math.min(1, Math.max(0, (x - p.from) / (p.to - p.from)));
+    store.patch('books', R.id, { prog: { f: at(f), cfi: R.loc.cfi, max: at(R.max), t }, touched: t });
+  }
 }
 const saveSoon = debounce(save, 5000);
 
@@ -203,6 +226,20 @@ function onRelocate(reason) {
   if (!loc) return;
   R.loc = loc;
   const f = loc.fraction || 0;
+  const user = reason === 'page' || reason === 'snap' || reason === 'scroll';
+  if (R.parts) {
+    let part = partAt(R.parts, f);
+    if (R.pin) {
+      // The work she opened stays the current one until she is clearly outside it (its first page may
+      // begin a little before the computed boundary).
+      const pinned = R.parts.find(x => x.id === R.pin);
+      if (pinned && f < pinned.to && f > pinned.from - 1.5 / R.pages) part = pinned; else R.pin = null;
+    }
+    const wid = part ? part.id : R.host;
+    if (wid !== R.id) enter(wid, part, f);
+    const w = store.books.get(R.id);
+    if (user && part && w && (w.status === 'want' || w.status === 'paused')) setStatus(R.id, 'reading');
+  }
   if (f > R.max) {
     const pages = (f - R.max) * R.pages;
     if (R.settled && pages <= 4) R.acc.p += pages; // a jump through the contents is not reading
@@ -212,10 +249,28 @@ function onRelocate(reason) {
   R.active = Date.now();
   paint();
   saveSoon();
-  const user = reason === 'page' || reason === 'snap' || reason === 'scroll';
+  R.lastF = f;
   if (user && R.speaker && R.speaker.playing) R.speaker.sync();
   if (user && reason !== 'scroll') chrome(false);
   if (f >= 0.995 && !R.asked && store.books.get(R.id).status !== 'read') { R.asked = true; $('#rDone').hidden = false; }
+}
+
+/** Move the credit to another work of a collected volume (or back to the volume itself). */
+function enter(wid, part, f) {
+  flush();
+  const prev = R.part;
+  // Reading straight on across the end of a work finishes it.
+  if (prev && R.settled && R.lastF != null && f >= prev.to - 0.5 / R.pages && f - R.lastF < 4 / R.pages && f > R.lastF) {
+    const done = store.books.get(prev.id);
+    if (done && done.status !== 'read') { setStatus(prev.id, 'read'); toast(`Дочитано: ${done.title}`); }
+  }
+  R.id = wid;
+  R.part = part;
+  const w = store.books.get(wid);
+  R.max = part ? part.from + ((w.prog && w.prog.max) || 0) * (part.to - part.from) : R.hostMax;
+  R.asked = false;
+  const ttl = $('#reader .ttl');
+  if (ttl && w) ttl.textContent = w.title;
 }
 
 /** Every 15 s: count time spent reading (recent page turns) or listening (the voice is on). */
@@ -237,9 +292,12 @@ function tick() {
 
 // ---------- quotes ----------
 
+/** True for the open file's own record and for every work inside it. */
+const inFile = id => id === R.host || !!(R.parts && R.parts.some(p => p.id === id));
+
 function drawQuotes() {
   if (!R) return;
-  for (const [, q] of store.quotes) if (q.book === R.id && q.cfi) R.view.addAnnotation({ value: q.cfi }).catch(() => {});
+  for (const [, q] of store.quotes) if (inFile(q.book) && q.cfi) R.view.addAnnotation({ value: q.cfi }).catch(() => {});
 }
 
 function onLoad({ doc, index }) {
@@ -285,7 +343,7 @@ async function listen() {
   if (!R) return;
   if (R.speaker) { R.speaker.toggle(); return; }
   const b = store.books.get(R.id), s = store.settings;
-  const rate = b.speed || s.rate || 1;
+  const rate = store.books.get(R.host).speed || s.rate || 1;
   const sp = new Speaker({ view: R.view, voice: s.voice, rate, lift: s.lift, meta: { title: b.title, artist: b.author || '', album: 'Глава' } });
   R.speaker = sp;
   R.spoken = 0;
@@ -325,9 +383,9 @@ function cycleSleep() {
 }
 
 function changeRate(d) {
-  const b = store.books.get(R.id);
+  const b = store.books.get(R.host);
   const rate = Math.min(2, Math.max(0.7, Math.round(((b.speed || store.settings.rate || 1) + d) * 10) / 10));
-  store.patch('books', R.id, { speed: rate });
+  store.patch('books', R.host, { speed: rate });
   R.speaker.setRate(rate);
   $('#rRate').textContent = rateText(rate);
 }
@@ -370,20 +428,20 @@ function openLook() {
 
 // A bookmark belongs to the page it was set on: anything within a third of a page counts as "here".
 function markAt(f) {
-  const marks = store.books.get(R.id).marks || [], near = 0.34 / R.pages;
+  const marks = store.books.get(R.host).marks || [], near = 0.34 / R.pages;
   return marks.findIndex(m => Math.abs(m.f - f) <= near);
 }
 
 function toggleMark() {
   if (!R.loc) return;
-  const b = store.books.get(R.id), marks = [...(b.marks || [])], f = R.loc.fraction || 0, i = markAt(f);
+  const b = store.books.get(R.host), marks = [...(b.marks || [])], f = R.loc.fraction || 0, i = markAt(f);
   if (i >= 0) marks.splice(i, 1);
   else {
     const here = R.loc.range ? R.loc.range.toString().replace(/\s+/g, ' ').trim().slice(0, 90) : '';
     marks.push({ cfi: R.loc.cfi, f, at: today(), label: (R.loc.tocItem && R.loc.tocItem.label || '').trim(), text: here });
     marks.sort((a, c) => a.f - c.f);
   }
-  store.patch('books', R.id, { marks });
+  store.patch('books', R.host, { marks });
   paint();
   toast(i >= 0 ? 'Закладка снята' : 'Закладка поставлена');
 }
@@ -415,8 +473,8 @@ function openToc() {
   const walk = (items, depth) => { for (const it of items || []) { flat.push({ ...it, depth }); walk(it.subitems, depth + 1); } };
   walk(R.view.book.toc, 0);
   const cur = R.loc && R.loc.tocItem ? R.loc.tocItem.href : '';
-  const marks = store.books.get(R.id).marks || [];
-  const mine = [...store.quotes].filter(([, q]) => q.book === R.id && q.cfi);
+  const marks = store.books.get(R.host).marks || [];
+  const mine = [...store.quotes].filter(([, q]) => inFile(q.book) && q.cfi);
   const page = f => Math.min(R.pages, Math.floor(f * R.pages) + 1);
   openSheet({
     title: 'Оглавление',
@@ -469,8 +527,10 @@ const acts = {
 async function open(id, { andListen = false } = {}) {
   const b = store.books.get(id);
   if (!b) return;
-  const file = await files.get(id);
-  if (!file) { toast('Файла этой книги нет на этом устройстве'); return; }
+  const hostId = b.src && files.has(b.src.book) ? b.src.book : id;
+  const host = store.books.get(hostId);
+  const file = await files.get(hostId);
+  if (!file || !host) { toast('Файла этой книги нет на этом устройстве'); return; }
   if (R) close();
   const el = $('#reader');
   setHTML(el, shell(b));
@@ -486,14 +546,16 @@ async function open(id, { andListen = false } = {}) {
     toast('Книга не открылась: файл повреждён или защищён');
     return;
   }
-  R = { id, view, pages: b.pages || 1, max: (b.prog && (b.prog.max || b.prog.f)) || 0, acc: { p: 0, m: 0, l: 0 }, active: Date.now(), tickAt: Date.now(), settled: false, spoken: 0 };
+  const hostMax = (host.prog && (host.prog.max || host.prog.f)) || 0;
+  R = { host: hostId, id: hostId, part: null, parts: host.parts && host.parts.length ? host.parts : null, pin: hostId !== id ? id : null,
+    view, pages: host.pages || 1, max: hostMax, hostMax, lastF: null, acc: { p: 0, m: 0, l: 0 }, active: Date.now(), tickAt: Date.now(), settled: false, spoken: 0 };
   view.renderer.addEventListener('relocate', e => onRelocate(e.detail.reason));
   view.addEventListener('load', e => onLoad(e.detail));
   view.addEventListener('create-overlay', drawQuotes);
   view.addEventListener('draw-annotation', e => e.detail.draw(Overlayer.highlight, { color: 'rgba(216,178,90,.45)' }));
   applyLook();
-  await view.init({ lastLocation: b.prog && b.prog.cfi, showTextStart: true });
-  if (b.status === 'want' || b.status === 'paused') setStatus(id, 'reading');
+  await view.init({ lastLocation: hostId !== id ? ((b.prog && b.prog.cfi) || b.src.href) : (host.prog && host.prog.cfi), showTextStart: true });
+  if (!R.parts && (b.status === 'want' || b.status === 'paused')) setStatus(id, 'reading');
   R.timer = setInterval(tick, 15000);
   if (andListen) listen();
 }
@@ -516,6 +578,7 @@ export function install(hooks) {
   hooks.read = id => open(id);
   hooks.listen = id => { unlock(); open(id, { andListen: true }); };
   hooks.importFile = importFile;
+  hooks.scan = rescan;
   const el = $('#reader');
   el.addEventListener('click', e => {
     const b = e.target.closest('[data-r]');

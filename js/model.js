@@ -107,7 +107,7 @@ export function finishedIn(from, to) {
 }
 
 /** Short stories count towards a series, but not as "books read". */
-export const countsAsBook = b => b.kind !== 'story';
+export const countsAsBook = b => b.kind !== 'story' && !b.parts;
 
 export function bookFraction(b) {
   if (b.status === 'read') return 1;
@@ -117,7 +117,7 @@ export function bookFraction(b) {
 }
 
 export function current() {
-  const reading = [...store.books].filter(([, b]) => b.status === 'reading');
+  const reading = [...store.books].filter(([, b]) => b.status === 'reading' && !b.parts);
   reading.sort((a, b) => (b[1].touched || 0) - (a[1].touched || 0));
   return reading.map(([id, b]) => ({ id, ...b }));
 }

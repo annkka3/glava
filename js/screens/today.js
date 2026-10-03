@@ -2,7 +2,7 @@
 import { html, today, fmtDayFull, roman, count, PL, plural, addDays, weekday, DAYS_SHORT, MONTHS_OF, num } from '../util.js';
 import { store } from '../store.js';
 import * as M from '../model.js';
-import { files } from '../files.js';
+import { readable } from './book.js';
 import { ICON, rings, cover, bar, medal } from '../ui.js';
 
 const ORD = ['', 'первый', 'второй', 'третий', 'четвёртый', 'пятый', 'шестой', 'седьмой', 'восьмой', 'девятый', 'десятый',
@@ -78,7 +78,7 @@ function bookCard() {
   <div class="stack tight">${bar(f)}<div class="row between tiny muted"><span>${meta[0]}</span><span>${meta[1] || ''}</span></div></div>
   ${p ? html`<p class="tiny muted">${p.late ? 'Срок по плану прошёл: ' : 'План: '}${p.left ? html`к ${p.label} по ${count(p.perDay, PL.pages)} в день` : 'книга дочитана'}</p>` : ''}
   <div class="row">
-    ${files.has(b.id) ? html`<button class="btn primary" data-act="read" data-id="${b.id}">Читать</button><button class="btn" data-act="listen" data-id="${b.id}">${ICON.ear}Слушать</button>`
+    ${readable(b.id) ? html`<button class="btn primary" data-act="read" data-id="${b.id}">Читать</button><button class="btn" data-act="listen" data-id="${b.id}">${ICON.ear}Слушать</button>`
       : html`<button class="btn primary" data-act="log" data-book="${b.id}">Отметить страницы</button><button class="btn" data-act="attach" data-id="${b.id}">${ICON.file}Файл</button>`}
   </div>
   ${others.length ? html`<div class="divider"></div><div class="stack tight">${others.slice(0, 3).map(o => html`<button class="row" data-act="book" data-id="${o.id}" style="text-align:left;min-height:44px">

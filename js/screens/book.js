@@ -14,7 +14,13 @@ export const GENRES = ['Классика', 'Современная проза', 
   'Бизнес', 'Саморазвитие', 'Экономика и финансы', 'Наука', 'История', 'Мемуары и биографии'];
 
 /** Hooks the reader and the file importer register themselves into (they load later). */
-export const hooks = { read: null, listen: null, importFile: null };
+export const hooks = { read: null, listen: null, importFile: null, scan: null };
+
+/** Can this record be opened in the reader on this device: its own file, or a place inside a collected volume. */
+export function readable(id) {
+  const b = store.books.get(id);
+  return files.has(id) || !!(b && b.src && files.has(b.src.book));
+}
 
 // ---------- status ----------
 
@@ -43,7 +49,9 @@ export function toggleRead(id) {
 function bookBody(id) {
   const b = store.books.get(id);
   if (!b) return html`<p class="muted">Книга удалена.</p>`;
-  const f = M.bookFraction(b), p = M.plan(b), hasFile = files.has(id);
+  const f = M.bookFraction(b), p = M.plan(b), ownFile = files.has(id), hasFile = readable(id);
+  const host = b.src ? store.books.get(b.src.book) : null;
+  const parts = (b.parts || []).map(x => [x.id, store.books.get(x.id)]).filter(([, w]) => w);
   const inCols = [...store.cols].filter(([, c]) => (c.items || []).includes(id));
   const otherCols = [...store.cols].filter(([, c]) => !(c.items || []).includes(id));
   const quotes = [...store.quotes].filter(([, q]) => q.book === id).sort((a, b2) => (a[1].at < b2[1].at ? 1 : -1));
@@ -68,6 +76,13 @@ ${b.status !== 'read' && (f > 0 || b.pages) ? html`<div class="stack tight">${ba
   ${hasFile ? html`<button class="btn primary" data-act="read">${ICON.book}Читать</button><button class="btn" data-act="listen">${ICON.ear}Слушать</button>`
     : html`<button class="btn primary" data-act="attach">${ICON.file}Добавить файл книги</button>`}
 </div>
+${host && hasFile ? html`<p class="tiny muted">Текст лежит в файле «${host.title}» и открывается сразу на нужном месте.</p>` : ''}
+${ownFile ? html`<div class="row"><button class="btn quiet" data-act="scan">${ICON.search}Найти в файле отдельные произведения</button></div>` : ''}
+${parts.length ? html`<div class="stack" style="gap:6px">
+  <p class="eyebrow">В этом файле: ${parts.length}, прочитано ${parts.filter(([wid]) => M.isRead(wid)).length}</p>
+  <div class="list">${parts.map(([wid, w]) => html`<button class="row between" data-act="part" data-id="${wid}" style="min-height:44px;text-align:left;border-bottom:1px solid var(--line-soft)">
+    <span class="grow small">${w.title}</span><span class="tiny ${M.isRead(wid) ? '' : 'muted'}" style="${M.isRead(wid) ? 'color:var(--accent)' : ''}">${M.isRead(wid) ? 'прочитано' : w.status === 'reading' ? Math.round(M.bookFraction(w) * 100) + ' %' : ''}</span></button>`)}</div>
+</div>` : ''}
 <div class="row"><button class="btn quiet" data-act="log">${ICON.plus}Отметить страницы</button></div>
 <div class="row top">
   <label class="field grow"><span>Страниц в книге</span><input class="input" type="number" inputmode="numeric" min="1" max="9999" value="${b.pages || ''}" placeholder="например, 320" data-field="pages"></label>
@@ -88,7 +103,7 @@ ${p && b.status !== 'read' ? html`<p class="small muted">${p.late ? 'Срок п
   <div class="wrap">${inCols.map(([cid, c]) => html`<button class="chip on" data-act="col-open" data-id="${cid}">${c.name}</button>`)}${inCols.length ? '' : html`<span class="small muted">Книга не входит ни в одну подборку.</span>`}</div>
   ${otherCols.length ? html`<label class="field"><span>Добавить в подборку</span><select class="input" data-field="addCol"><option value="">выбрать…</option>${otherCols.map(([cid, c]) => html`<option value="${cid}">${c.name}</option>`)}</select></label>` : ''}
 </div>
-${hasFile ? html`<div class="row"><button class="btn quiet" data-act="detach">${ICON.trash}Убрать файл с этого устройства</button></div>` : ''}
+${ownFile ? html`<div class="row"><button class="btn quiet" data-act="detach">${ICON.trash}Убрать файл с этого устройства</button></div>` : ''}
 <div class="row"><button class="btn quiet" data-act="edit">${ICON.edit}Изменить</button><button class="btn danger" data-act="delete">${ICON.trash}Удалить</button></div>
 <input type="file" id="bookFile" hidden>`;
 }
@@ -107,6 +122,14 @@ export function openBook(id) {
       attach: () => $('#bookFile').click(),
       detach: async () => { await files.remove(id); refresh(); toast('Файл убран с этого устройства'); },
       log: () => openLog({ book: id }),
+      part: el => openBook(el.dataset.id),
+      scan: async () => {
+        if (!hooks.scan) { toast('Читалка ещё загружается'); return; }
+        toast('Читаю оглавление файла…');
+        let res = null;
+        try { res = await hooks.scan(id); } catch (e) { /* reported below */ }
+        openScan(id, res);
+      },
       'col-open': el => { closeSheet(); location.hash = '#col/' + el.dataset.id; },
       'quote-add': () => openQuote(id),
       'quote-del': el => store.remove('quotes', el.dataset.id),
@@ -142,6 +165,23 @@ export function openBook(id) {
     else if (field === 'note') store.patch('books', id, { note: el.value.trim() });
     else if (field === 'addCol' && el.value) { const c = store.cols.get(el.value); store.patch('cols', el.value, { items: [...(c.items || []), id] }); }
   };
+}
+
+// ---------- what was found inside a collected volume ----------
+
+function openScan(id, res) {
+  const linked = res ? res.linked : [], missed = res ? res.missed : [];
+  openSheet({
+    title: 'Произведения в файле',
+    onClose: () => openBook(id),
+    body: !res || !res.entries ? html`<p class="muted">В этом файле нет оглавления, по которому можно найти отдельные произведения.</p>`
+      : html`<p>${linked.length ? `Найдено и привязано: ${linked.length}. Каждое теперь открывается из своей карточки сразу на нужной странице и ведёт свой счёт прочитанного.` : 'Ни одно название из оглавления не совпало с книгами твоей библиотеки.'}</p>
+${linked.length ? html`<div class="list">${linked.map(x => html`<div class="row" style="min-height:36px;border-bottom:1px solid var(--line-soft)"><span class="small">${x.title}</span></div>`)}</div>` : ''}
+${missed.length ? html`<div class="stack" style="gap:6px"><p class="eyebrow">Не распознаны: ${missed.length}</p>
+<p class="tiny muted">Этих названий нет в библиотеке или они записаны иначе. Добавь произведение (или поправь его название) и повтори поиск.</p>
+<p class="small muted">${missed.slice(0, 40).join(' · ')}${missed.length > 40 ? ' …' : ''}</p></div>` : ''}
+<div class="row"><button class="btn primary" data-act="sheet-close">Готово</button></div>`,
+  });
 }
 
 // ---------- quotes by hand (paper books) ----------
