@@ -55,7 +55,7 @@ export class TtsPlayer extends EventTarget {
   // ---------- public ----------
 
   /** Load a voice (downloads it on first use). Resolves with {voice, sampleRate, ms}. */
-  load(voice, onProgress) {
+  load(voice, onProgress, { keep = false } = {}) {
     if (!this.worker) {
       this.worker = new Worker(this.workerUrl, { type: 'module' });
       this.worker.onmessage = e => this._onMessage(e.data);
@@ -63,9 +63,9 @@ export class TtsPlayer extends EventTarget {
         this._log('ошибка движка: ' + (e.message || 'не удалось запустить'));
         if (this._loading) { this._loading.reject(new Error(e.message || 'Не удалось запустить движок голоса')); this._loading = null; }
       };
+      this.worker.postMessage({ type: 'reset', gen: this._gen }); // the worker starts at 0; we may already be further
     }
-    this.stop();
-    this._setState('loading');
+    if (!keep) { this.stop(); this._setState('loading'); }
     return new Promise((resolve, reject) => {
       this._loading = { resolve, reject, onProgress };
       this.worker.postMessage({ type: 'load', voice });
@@ -82,6 +82,19 @@ export class TtsPlayer extends EventTarget {
     this.stats.startedAt = Date.now();
     this._setState('buffering');
     this._pump();
+    this._advance();
+  }
+
+  /**
+   * Start the audio element on silence, inside a tap, before any text is ready: this opens the
+   * audio session at once and lets a voice load and text arrive (append) without another tap.
+   */
+  prime() {
+    this.stop();
+    this.more = true;
+    this._wantPlay = true;
+    this.stats.startedAt = Date.now();
+    this._setState('buffering');
     this._advance();
   }
 
@@ -104,6 +117,16 @@ export class TtsPlayer extends EventTarget {
   }
 
   toggle() { if (this._wantPlay) this.pause(); else this.resume(); }
+
+  /**
+   * Feed more text while speaking (the next chapter). Set `player.more = true` while further
+   * text may still come: running out then means "wait", not "the end". A 'low' event asks for it.
+   */
+  append(units) {
+    this.units.push(...units);
+    this._lowSent = false;
+    this._pump();
+  }
 
   stop() {
     this._gen++;
@@ -168,6 +191,8 @@ export class TtsPlayer extends EventTarget {
     this._current = -1;
     this._playedDone = 0;
     this._wantPlay = false;
+    this.more = false;
+    this._lowSent = false;
     this.stats = { units: 0, synthMs: 0, synthSec: 0, worst: Infinity, segments: 0, underruns: 0, underrunSec: 0, firstSoundMs: null, startedAt: 0 };
   }
 
@@ -186,6 +211,10 @@ export class TtsPlayer extends EventTarget {
       this._inFlight++;
       this.worker.postMessage({ type: 'synth', id: i, gen: this._gen, text: forSpeech(this._unit(i).text) });
     }
+    if (this.more && !this.loop && !this._lowSent && this.units.length - this._requested < 8) {
+      this._lowSent = true;
+      this._emit('low');
+    }
   }
 
   _onMessage(msg) {
@@ -194,7 +223,7 @@ export class TtsPlayer extends EventTarget {
     } else if (msg.type === 'ready') {
       this.voice = msg.voice;
       this.sampleRate = msg.sampleRate;
-      this._setState('idle');
+      if (this.state === 'loading') this._setState('idle');
       if (this._loading) { this._loading.resolve(msg); this._loading = null; }
     } else if (msg.type === 'audio') {
       if (msg.gen !== this._gen) return;
@@ -212,7 +241,7 @@ export class TtsPlayer extends EventTarget {
       this._pump();
     } else if (msg.type === 'error') {
       if (msg.during === 'load') {
-        this._setState('idle');
+        if (this.state === 'loading') this._setState('idle');
         if (this._loading) { this._loading.reject(new Error(msg.message)); this._loading = null; }
         return;
       }
@@ -262,7 +291,7 @@ export class TtsPlayer extends EventTarget {
       return;
     }
     this._cursor = i; // skip units that produced no sound
-    if (!this._has(this._cursor)) {
+    if (!this._has(this._cursor) && !this.more) {
       this._wantPlay = false;
       this._setState('ended');
       this._emit('ended');

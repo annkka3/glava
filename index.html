@@ -5,30 +5,26 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Глава</title>
 <meta name="description" content="Глава: книги, чтение и голос в одном приложении.">
+<!-- Books are untrusted content shown in frames: nothing but our own scripts may run. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' blob:; img-src 'self' blob: data:; font-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self' blob: https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com; frame-src blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'none'">
 <meta name="theme-color" content="#0F2B24">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Глава">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/favicon-64.png" type="image/png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<script src="js/theme-boot.js"></script>
 <link rel="stylesheet" href="fonts/fonts.css">
-<style>
-/* Placeholder cover while the app is being built: one centred title page. */
-:root{--bg:#0F2B24;--ink:#F3ECDA;--muted:#A9B8A9;--gold:#D8B25A;--gold-hi:#F4DFA0;color-scheme:dark}
-*{box-sizing:border-box}
-html,body{height:100%}
-body{margin:0;display:flex;align-items:center;justify-content:center;padding:24px;color:var(--ink);font-family:'Onest','Helvetica Neue',Helvetica,sans-serif;font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased;
-  background-color:var(--bg);
-  background-image:repeating-linear-gradient(0deg,rgba(255,255,255,.03) 0 1px,transparent 1px 3px),repeating-linear-gradient(90deg,rgba(0,0,0,.12) 0 1px,transparent 1px 3px)}
-main{max-width:340px;display:flex;flex-direction:column;gap:18px;align-items:flex-start}
-.rule{width:56px;height:1px;background:var(--gold)}
-h1{margin:0;font-family:'Cormorant','Times New Roman',serif;font-style:italic;font-weight:600;font-size:72px;line-height:1}
-p{margin:0;color:var(--muted)}
-a{display:inline-flex;align-items:center;min-height:46px;padding:0 22px;border-radius:23px;border:1px solid var(--gold);color:var(--gold-hi);font-weight:600;text-decoration:none}
-a:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
-</style>
+<link rel="stylesheet" href="css/app.css">
 </head>
 <body>
-<main>
-  <div class="rule"></div>
-  <h1>Глава</h1>
-  <p>Приложение для чтения ещё собирается. Пока здесь можно послушать, каким голосом оно будет читать книги.</p>
-  <a href="voice-test/">Проверка голоса</a>
-</main>
+<main id="view"></main>
+<nav id="tabs" aria-label="Разделы"></nav>
+<div id="reader" hidden></div>
+<dialog id="sheet" class="sheet"></dialog>
+<div id="toast" role="status" aria-live="polite"></div>
+<script type="module" src="js/app.js"></script>
 </body>
 </html>

@@ -1,0 +1,471 @@
+// The reader: opens a book file with foliate-js, applies the reading settings, tracks progress,
+// pages and minutes, saves quotes from selected text, and hosts the listening bar.
+import { $, html, raw, setHTML, today, count, PL, uid, debounce } from '../util.js';
+import { store } from '../store.js';
+import * as M from '../model.js';
+import { files } from '../files.js';
+import { ICON, openSheet, updateSheet, closeSheet, toast } from '../ui.js';
+import { setStatus, findBook } from '../screens/book.js';
+import { applyTheme } from '../screens/settings.js';
+import { makeBook } from '../../vendor/foliate-js/view.js';
+import { Overlayer } from '../../vendor/foliate-js/overlayer.js';
+import { Speaker, unlock } from './speak.js';
+
+const THEMES = {
+  paper: { name: 'Бумага', bg: '#F4EEDD', fg: '#1E2B26', muted: '#5F6A63', accent: '#7A5C12', line: 'rgba(122,92,18,.3)', dark: false },
+  white: { name: 'Белая', bg: '#FFFFFF', fg: '#1B1B1B', muted: '#6B6B6B', accent: '#7A5C12', line: 'rgba(0,0,0,.14)', dark: false },
+  sepia: { name: 'Сепия', bg: '#F1E3C6', fg: '#3B2E1E', muted: '#77664D', accent: '#8A5A1B', line: 'rgba(59,46,30,.2)', dark: false },
+  gray: { name: 'Серая', bg: '#48494B', fg: '#E8E6E1', muted: '#B9B7B0', accent: '#E3C272', line: 'rgba(255,255,255,.16)', dark: true },
+  night: { name: 'Ночная', bg: '#0F2B24', fg: '#E9E1CC', muted: '#A9B8A9', accent: '#D8B25A', line: 'rgba(216,178,90,.3)', dark: true },
+  black: { name: 'Чёрная', bg: '#000000', fg: '#C8C6C0', muted: '#8F8D87', accent: '#D8B25A', line: 'rgba(255,255,255,.16)', dark: true },
+};
+const FONTS = {
+  literata: ['Литерата', "'Literata', Georgia, serif"],
+  charter: ['Чартер', "Charter, 'Bitstream Charter', Georgia, serif"],
+  georgia: ['Георгия', "Georgia, 'Times New Roman', serif"],
+  newyork: ['Нью-Йорк', "ui-serif, 'New York', Georgia, serif"],
+  sans: ['Без засечек', "'Onest', system-ui, -apple-system, 'Helvetica Neue', sans-serif"],
+  book: ['Как в книге', ''],
+};
+const GAPS = { narrow: '4%', normal: '7%', wide: '11%' };
+const RICON = {
+  list: raw('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h9"/></svg>'),
+  prev: raw('<svg viewBox="0 0 24 24" aria-hidden="true" style="fill:currentColor;stroke:none"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg>'),
+  next: raw('<svg viewBox="0 0 24 24" aria-hidden="true" style="fill:currentColor;stroke:none"><path d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg>'),
+};
+const FB2_GENRE = [[/det|crime/, 'Детектив'], [/thriller/, 'Триллер'], [/fantasy/, 'Фэнтези'], [/^sf|sf_/, 'Фантастика'], [/horror/, 'Хоррор'], [/adv/, 'Приключения'],
+  [/classic/, 'Классика'], [/prose_history|historical/, 'Исторический роман'], [/poetry/, 'Поэзия'], [/dramaturgy/, 'Драматургия'], [/humor/, 'Сатира и юмор'],
+  [/child/, 'Детская литература'], [/psy/, 'Психология'], [/business|economics|banking/, 'Бизнес'], [/philosophy/, 'Философия'], [/sci_history|history/, 'История'],
+  [/biograph|memoir/, 'Мемуары и биографии'], [/antique/, 'Эпос и древняя литература'], [/sci_|science/, 'Наука'], [/prose|love/, 'Современная проза']];
+
+let R = null; // the open book: {id, view, max, pages, acc, …}
+
+const themeOf = r => THEMES[r.theme] || THEMES[document.documentElement.dataset.theme === 'light' ? 'paper' : 'night'];
+const fontOf = r => FONTS[r.font] || FONTS.literata;
+const rateText = rate => rate.toFixed(1).replace('.', ',') + '×';
+
+// ---------- importing a file ----------
+
+const text = x => (typeof x === 'string' ? x : !x ? '' : x.name ? text(x.name) : typeof x === 'object' ? text(Object.values(x)[0]) : String(x));
+
+async function thumb(blob) {
+  const bmp = await createImageBitmap(blob);
+  const w = 160, h = Math.round(bmp.height / bmp.width * w);
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  canvas.getContext('2d').drawImage(bmp, 0, 0, w, h);
+  return canvas.toDataURL('image/jpeg', 0.72);
+}
+
+/** Read a book file, work out its length in pages, and attach it to a record (existing or new). */
+async function importFile(file, bookId) {
+  toast('Разбираю книгу…');
+  let book;
+  try { book = await makeBook(file); } catch (err) { toast('Этот файл не получилось открыть'); return null; }
+  const meta = book.metadata || {};
+  const title = text(meta.title).trim() || file.name.replace(/\.[^.]+$/, '');
+  const author = [].concat(meta.author || []).map(text).filter(Boolean).join(', ');
+  let chars = 0;
+  for (const s of book.sections) {
+    if (s.linear === 'no' || !s.createDocument) continue;
+    try { const doc = await s.createDocument(); chars += ((doc.body || doc.documentElement).textContent || '').replace(/\s+/g, ' ').length; } catch (e) { /* skip a broken chapter */ }
+  }
+  const pages = Math.max(1, Math.round(chars / M.PAGE_CHARS));
+  let cv = null;
+  try { const blob = book.getCover && await book.getCover(); if (blob) cv = await thumb(blob); } catch (e) { /* no cover */ }
+  const id = bookId || findBook(title, author) || uid();
+  const cur = store.books.get(id);
+  await files.attach(id, file);
+  if (cur) {
+    store.patch('books', id, { pages: cur.pages || pages, chars, fmt: 'e', ...(cv ? { cv } : {}), touched: Date.now() });
+  } else {
+    const subjects = [].concat(meta.subject || []).map(text).join(' ').toLowerCase();
+    const genre = (FB2_GENRE.find(([re]) => re.test(subjects)) || [])[1];
+    store.put('books', id, { title, author, kind: 'novel', genres: genre ? [genre] : [], status: 'want', custom: true, added: today(), pages, chars, fmt: 'e', cv, touched: Date.now() });
+  }
+  toast(cur ? 'Файл добавлен к книге' : 'Книга добавлена в библиотеку');
+  return id;
+}
+
+// ---------- look ----------
+
+function bookCSS(r, th) {
+  const base = new URL('../../fonts/', import.meta.url).href;
+  const cyr = 'U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116';
+  const lat = 'U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD';
+  const face = (family, file, style, range) => `@font-face{font-family:'${family}';font-style:${style};font-weight:400 700;src:url(${base}${file}) format('woff2');unicode-range:${range}}`;
+  const family = fontOf(r)[1];
+  return `@namespace epub "http://www.idpf.org/2007/ops";
+${face('Literata', 'literata-cyrillic.woff2', 'normal', cyr)}${face('Literata', 'literata-latin.woff2', 'normal', lat)}
+${face('Literata', 'literata-italic-cyrillic.woff2', 'italic', cyr)}${face('Literata', 'literata-italic-latin.woff2', 'italic', lat)}
+${face('Onest', 'onest-cyrillic.woff2', 'normal', cyr)}${face('Onest', 'onest-latin.woff2', 'normal', lat)}
+html{color-scheme:${th.dark ? 'dark' : 'light'};background:${th.bg} !important;color:${th.fg} !important;font-size:${r.size}px !important;-webkit-text-size-adjust:none}
+body{background:none !important;color:inherit !important;${family ? `font-family:${family} !important;` : ''}}
+${family ? 'p,div,span,li,blockquote,dd,dt,td,h1,h2,h3,h4,h5,h6,a,em,i,b,strong,cite{font-family:inherit !important}' : ''}
+p,li,blockquote,dd{line-height:${r.line} !important;text-align:${r.justify ? 'justify' : 'start'};-webkit-hyphens:${r.justify ? 'auto' : 'manual'};hyphens:${r.justify ? 'auto' : 'manual'};hanging-punctuation:allow-end last;widows:2;orphans:2}
+p,div,span,li,blockquote,dd,dt,td,h1,h2,h3,h4,h5,h6,em,i,b,strong{color:inherit !important;background-color:transparent !important}
+a:link,a:visited{color:${th.accent} !important}
+[align="left"]{text-align:left}[align="right"]{text-align:right}[align="center"]{text-align:center}[align="justify"]{text-align:justify}
+pre{white-space:pre-wrap !important}
+img,svg{max-width:100%}
+::selection{background:rgba(216,178,90,.42)}
+aside[epub|type~="endnote"],aside[epub|type~="footnote"],aside[epub|type~="note"],aside[epub|type~="rearnote"]{display:none}`;
+}
+
+function applyLook() {
+  if (!R) return;
+  const r = store.settings.reader, th = themeOf(r), el = $('#reader'), v = R.view.renderer;
+  for (const [k, val] of [['--r-bg', th.bg], ['--r-fg', th.fg], ['--r-muted', th.muted], ['--r-accent', th.accent], ['--r-line', th.line]]) el.style.setProperty(k, val);
+  v.setAttribute('flow', r.flow === 'scrolled' ? 'scrolled' : 'paginated');
+  v.setAttribute('gap', GAPS[r.margins] || GAPS.normal);
+  v.setAttribute('max-inline-size', '680px');
+  v.setAttribute('max-column-count', innerWidth >= 900 ? '2' : '1');
+  v.setAttribute('margin', '46px');
+  v.setStyles(bookCSS(r, th));
+  const meta = $('meta[name="theme-color"]');
+  if (meta) meta.content = th.bg;
+}
+
+// ---------- shell ----------
+
+const shell = b => html`
+<div class="r-bar r-top">
+  <button data-r="close" aria-label="Закрыть книгу">${ICON.back}</button>
+  <div class="ttl">${b.title}</div>
+  <button data-r="toc" aria-label="Оглавление">${RICON.list}</button>
+  <button data-r="look" aria-label="Настройки чтения" style="font-family:var(--f-display);font-size:21px;font-weight:600">Аа</button>
+  <button data-r="listen" aria-label="Слушать">${ICON.ear}</button>
+</div>
+<div class="r-foot" id="rFoot"></div>
+<div class="r-bar r-bottom">
+  <input type="range" id="rSlider" min="0" max="1000" step="1" value="0" aria-label="Место в книге">
+  <div class="r-meta"><span id="rPage"></span><span id="rLeft"></span></div>
+</div>
+<button class="r-quote" id="rQuote" data-r="quote" hidden>${ICON.quote}Сохранить цитату</button>
+<div class="r-done card" id="rDone" hidden>
+  <p class="h3">Книга дочитана?</p>
+  <div class="row"><button class="btn primary" data-r="finish">Да, дочитала</button><button class="btn" data-r="not-yet">Ещё нет</button></div>
+</div>
+<div class="r-listen" id="rListen" hidden>
+  <div class="line"><div class="say grow" id="rSay">Готовлю голос…</div><button class="ic" data-r="l-close" aria-label="Выключить чтение вслух">${ICON.x}</button></div>
+  <div class="line">
+    <button class="ic" data-r="l-prev" aria-label="Предыдущая фраза">${RICON.prev}</button>
+    <button class="ic main" data-r="l-toggle" id="rToggle" aria-label="Пауза">${ICON.pause}</button>
+    <button class="ic" data-r="l-next" aria-label="Следующая фраза">${RICON.next}</button>
+    <button class="chip" data-r="l-sleep" id="rSleep" style="min-height:40px;padding:0 10px">Сон</button>
+    <div class="rate" role="group" aria-label="Скорость"><button data-r="l-slower" aria-label="Медленнее">−</button><output id="rRate">1,0×</output><button data-r="l-faster" aria-label="Быстрее">+</button></div>
+  </div>
+</div>`;
+
+function chrome(on) {
+  const el = $('#reader');
+  el.classList.toggle('chrome-off', on === undefined ? !el.classList.contains('chrome-off') : !on);
+}
+
+function paint() {
+  if (!R || !R.loc) return;
+  const f = R.loc.fraction || 0, page = Math.min(R.pages, Math.floor(f * R.pages) + 1);
+  $('#rSlider').value = Math.round(f * 1000);
+  $('#rFoot').textContent = `${page} из ${R.pages}`;
+  $('#rPage').textContent = `стр. ${page} из ${R.pages} · ${Math.round(f * 100)} %`;
+  const t = R.loc.time;
+  const left = t && t.total > 0 ? R.pages * (1 - f) * t.section / t.total : 0;
+  const label = R.loc.tocItem && R.loc.tocItem.label ? R.loc.tocItem.label.trim() : '';
+  $('#rLeft').textContent = left >= 0.5 ? `до конца главы ${Math.max(1, Math.round(left / M.pace()))} мин` : label;
+}
+
+// ---------- progress, pages, minutes ----------
+
+function flush() {
+  if (!R) return;
+  const a = R.acc;
+  if (a.p >= 0.05 || a.m >= 0.05) {
+    M.logReading({ bookId: R.id, pages: a.p, minutes: a.m, listen: a.l });
+    R.acc = { p: 0, m: 0, l: 0 };
+  }
+}
+
+function save() {
+  if (!R || !R.loc) return;
+  flush();
+  store.patch('books', R.id, { prog: { f: R.loc.fraction || 0, cfi: R.loc.cfi, max: R.max, t: Date.now() }, touched: Date.now() });
+}
+const saveSoon = debounce(save, 5000);
+
+function onRelocate(reason) {
+  if (!R) return;
+  const loc = R.view.lastLocation;
+  if (!loc) return;
+  R.loc = loc;
+  const f = loc.fraction || 0;
+  if (f > R.max) {
+    const pages = (f - R.max) * R.pages;
+    if (R.settled && pages <= 4) R.acc.p += pages; // a jump through the contents is not reading
+    R.max = f;
+  }
+  R.settled = true;
+  R.active = Date.now();
+  paint();
+  saveSoon();
+  const user = reason === 'page' || reason === 'snap' || reason === 'scroll';
+  if (user && R.speaker && R.speaker.playing) R.speaker.sync();
+  if (user && reason !== 'scroll') chrome(false);
+  if (f >= 0.995 && !R.asked && store.books.get(R.id).status !== 'read') { R.asked = true; $('#rDone').hidden = false; }
+}
+
+/** Every 15 s: count time spent reading (recent page turns) or listening (the voice is on). */
+function tick() {
+  if (!R) return;
+  const now = Date.now(), dt = Math.min(60, (now - R.tickAt) / 1000) / 60;
+  R.tickAt = now;
+  const sp = R.speaker;
+  if (sp && sp.playing) {
+    const played = sp.playedSec;
+    const min = Math.max(0, played - R.spoken) / 60 / (sp.player.rate || 1);
+    R.spoken = played;
+    R.acc.m += min; R.acc.l += min;
+  } else if (!document.hidden && now - R.active < 120000) {
+    R.acc.m += dt;
+  }
+  if (R.acc.m >= 1 || R.acc.p >= 1) flush();
+}
+
+// ---------- quotes ----------
+
+function drawQuotes() {
+  if (!R) return;
+  for (const [, q] of store.quotes) if (q.book === R.id && q.cfi) R.view.addAnnotation({ value: q.cfi }).catch(() => {});
+}
+
+function onLoad({ doc, index }) {
+  doc.addEventListener('selectionchange', debounce(() => {
+    if (!R) return;
+    const sel = doc.getSelection();
+    const ok = sel && sel.rangeCount && !sel.isCollapsed && sel.toString().trim().length > 2;
+    R.sel = ok ? { range: sel.getRangeAt(0).cloneRange(), text: sel.toString().replace(/\s+/g, ' ').trim(), index } : null;
+    $('#rQuote').hidden = !ok;
+  }, 250));
+  doc.addEventListener('click', e => {
+    if (!R || e.defaultPrevented || e.target.closest('a[href]')) return;
+    const sel = doc.getSelection();
+    if (sel && !sel.isCollapsed) return;
+    const frame = doc.defaultView.frameElement;
+    const x = (frame ? frame.getBoundingClientRect().left : 0) + e.clientX;
+    if (store.settings.reader.flow === 'scrolled') { chrome(); return; }
+    if (x < innerWidth * 0.28) R.view.prev();
+    else if (x > innerWidth * 0.72) R.view.next();
+    else chrome();
+  });
+  doc.addEventListener('keydown', onKey);
+}
+
+function onKey(e) {
+  if (!R || $('#sheet').open) return;
+  if (e.key === 'ArrowLeft' || e.key === 'PageUp') { R.view.prev(); e.preventDefault(); }
+  else if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') { R.view.next(); e.preventDefault(); }
+  else if (e.key === 'Escape') close();
+}
+
+// ---------- listening ----------
+
+function listenUI(state) {
+  if (!R) return;
+  const playing = state === 'playing' || state === 'buffering' || state === 'loading';
+  setHTML($('#rToggle'), playing ? ICON.pause : ICON.play);
+  $('#rToggle').setAttribute('aria-label', playing ? 'Пауза' : 'Продолжить');
+  if (state === 'ended') $('#rSay').textContent = 'Книга закончилась.';
+}
+
+async function listen() {
+  if (!R) return;
+  if (R.speaker) { R.speaker.toggle(); return; }
+  const b = store.books.get(R.id), s = store.settings;
+  const rate = b.speed || s.rate || 1;
+  const sp = new Speaker({ view: R.view, voice: s.voice, rate, meta: { title: b.title, artist: b.author || '', album: 'Глава' } });
+  R.speaker = sp;
+  R.spoken = 0;
+  $('#rListen').hidden = false;
+  $('#rRate').textContent = rateText(rate);
+  $('#rSay').textContent = 'Готовлю голос…';
+  chrome(false);
+  sp.addEventListener('state', e => listenUI(e.detail.state));
+  sp.addEventListener('say', e => { if (R) $('#rSay').textContent = e.detail.text; });
+  sp.addEventListener('sleep', () => { if (R) { $('#rSleep').textContent = 'Сон'; R.sleep = 0; toast('Таймер сна: чтение остановлено'); } });
+  try {
+    await sp.start(p => {
+      if (!R) return;
+      const mb = n => Math.round(n / 1048576);
+      $('#rSay').textContent = p.stage === 'start' ? 'Запускаю голос…' : `Загружаю ${p.stage === 'voice' ? 'голос' : 'движок'}: ${mb(p.loaded)} из ${mb(p.total)} МБ`;
+    });
+  } catch (err) {
+    toast('Голос не загрузился: ' + (err.message || 'нет связи'));
+    stopListening();
+  }
+}
+
+function stopListening() {
+  if (!R || !R.speaker) return;
+  tick();
+  R.speaker.stop();
+  R.speaker = null;
+  $('#rListen').hidden = true;
+}
+
+const SLEEP = [0, 15, 30, 60, 'chapter'];
+function cycleSleep() {
+  R.sleep = ((R.sleep || 0) + 1) % SLEEP.length;
+  const v = SLEEP[R.sleep];
+  R.speaker.setSleep(v);
+  $('#rSleep').textContent = v === 0 ? 'Сон' : v === 'chapter' ? 'до главы' : `${v} мин`;
+}
+
+function changeRate(d) {
+  const b = store.books.get(R.id);
+  const rate = Math.min(2, Math.max(0.7, Math.round(((b.speed || store.settings.rate || 1) + d) * 10) / 10));
+  store.patch('books', R.id, { speed: rate });
+  R.speaker.setRate(rate);
+  $('#rRate').textContent = rateText(rate);
+}
+
+// ---------- sheets ----------
+
+function lookBody() {
+  const r = store.settings.reader;
+  const step = (key, label, value, shown) => html`<div class="row between"><span>${label}</span>
+<div class="stepper"><button data-act="step" data-k="${key}" data-d="-1" aria-label="Меньше">−</button><output>${shown}</output><button data-act="step" data-k="${key}" data-d="1" aria-label="Больше">+</button></div></div>`;
+  return html`<section class="stack"><p class="eyebrow">Фон</p>
+<div class="swatches"><button class="${THEMES[r.theme] ? '' : 'on'}" data-act="theme" data-v="auto" style="background:linear-gradient(135deg,#F4EEDD 50%,#0F2B24 50%);color:#7A5C12">Авто</button>
+${Object.entries(THEMES).map(([k, t]) => html`<button class="${r.theme === k ? 'on' : ''}" data-act="theme" data-v="${k}" style="background:${t.bg};color:${t.fg}">${t.name}</button>`)}</div></section>
+<section class="stack"><p class="eyebrow">Шрифт</p>
+<div class="wrap">${Object.entries(FONTS).map(([k, [name, css]]) => html`<button class="chip ${(FONTS[r.font] ? r.font : 'literata') === k ? 'on' : ''}" data-act="font" data-v="${k}" style="font-family:${css || 'inherit'};font-size:15px">${name}</button>`)}</div>
+${step('size', 'Размер', r.size, r.size)}
+${step('line', 'Межстрочный интервал', r.line, String(r.line).replace('.', ','))}</section>
+<section class="stack"><p class="eyebrow">Страница</p>
+<div class="seg" role="group" aria-label="Поля">${[['narrow', 'Узкие поля'], ['normal', 'Средние'], ['wide', 'Широкие']].map(([k, v]) => html`<button class="${(r.margins || 'normal') === k ? 'on' : ''}" data-act="set" data-k="margins" data-v="${k}">${v}</button>`)}</div>
+<div class="seg" role="group" aria-label="Листание">${[['paginated', 'Страницы'], ['scrolled', 'Лента']].map(([k, v]) => html`<button class="${(r.flow || 'paginated') === k ? 'on' : ''}" data-act="set" data-k="flow" data-v="${k}">${v}</button>`)}</div>
+<div class="seg" role="group" aria-label="Выравнивание">${[[true, 'По ширине'], [false, 'По левому краю']].map(([k, v]) => html`<button class="${!!r.justify === k ? 'on' : ''}" data-act="set" data-k="justify" data-v="${k ? '1' : ''}">${v}</button>`)}</div></section>`;
+}
+
+function openLook() {
+  const set = patch => { store.setSettings({ reader: patch }); applyLook(); updateSheet(lookBody()); };
+  openSheet({
+    title: 'Вид страницы', body: lookBody(),
+    acts: {
+      theme: el => set({ theme: el.dataset.v }),
+      font: el => set({ font: el.dataset.v }),
+      set: el => set({ [el.dataset.k]: el.dataset.k === 'justify' ? !!el.dataset.v : el.dataset.v }),
+      step: el => {
+        const r = store.settings.reader, d = +el.dataset.d;
+        if (el.dataset.k === 'size') set({ size: Math.min(34, Math.max(13, r.size + d)) });
+        else set({ line: Math.min(2.2, Math.max(1.1, Math.round((r.line + d * 0.1) * 10) / 10)) });
+      },
+    },
+  });
+}
+
+function openToc() {
+  const flat = [];
+  const walk = (items, depth) => { for (const it of items || []) { flat.push({ ...it, depth }); walk(it.subitems, depth + 1); } };
+  walk(R.view.book.toc, 0);
+  const cur = R.loc && R.loc.tocItem ? R.loc.tocItem.href : '';
+  const mine = [...store.quotes].filter(([, q]) => q.book === R.id && q.cfi);
+  openSheet({
+    title: 'Оглавление',
+    body: html`<div class="toc">${flat.map((it, i) => html`<button class="${it.href === cur ? 'cur' : ''}" data-act="go" data-i="${i}" style="padding-left:${it.depth * 16}px">${(it.label || '').trim() || 'Без названия'}</button>`)}
+${flat.length ? '' : html`<p class="muted">В этой книге нет оглавления.</p>`}</div>
+${mine.length ? html`<section class="stack" style="gap:8px"><p class="eyebrow">Цитаты</p><div class="toc">${mine.map(([qid, q]) => html`<button data-act="quote" data-id="${qid}"><span style="font-family:var(--f-display);font-size:18px;line-height:1.3">${q.text.length > 140 ? q.text.slice(0, 140) + '…' : q.text}</span></button>`)}</div></section>` : ''}`,
+    acts: {
+      go: el => { const it = flat[+el.dataset.i]; closeSheet(); if (it && it.href) R.view.goTo(it.href); },
+      quote: el => { const q = store.quotes.get(el.dataset.id); closeSheet(); if (q) R.view.goTo(q.cfi); },
+    },
+  });
+}
+
+// ---------- open / close ----------
+
+const acts = {
+  close: () => close(),
+  toc: () => openToc(),
+  look: () => openLook(),
+  listen: () => (R.speaker ? stopListening() : listen()),
+  quote: () => {
+    if (!R.sel) return;
+    const cfi = R.view.getCFI(R.sel.index, R.sel.range);
+    store.put('quotes', uid(), { book: R.id, text: R.sel.text, cfi, at: today(), where: (R.loc && R.loc.tocItem && R.loc.tocItem.label || '').trim() });
+    R.view.addAnnotation({ value: cfi }).catch(() => {});
+    R.view.deselect();
+    R.sel = null;
+    $('#rQuote').hidden = true;
+    toast('Цитата сохранена');
+  },
+  finish: () => { setStatus(R.id, 'read'); $('#rDone').hidden = true; toast('Книга дочитана'); },
+  'not-yet': () => { $('#rDone').hidden = true; },
+  'l-toggle': () => R.speaker && R.speaker.toggle(),
+  'l-prev': () => R.speaker && R.speaker.skip(-1),
+  'l-next': () => R.speaker && R.speaker.skip(1),
+  'l-close': () => stopListening(),
+  'l-sleep': () => R.speaker && cycleSleep(),
+  'l-slower': () => R.speaker && changeRate(-0.1),
+  'l-faster': () => R.speaker && changeRate(0.1),
+};
+
+async function open(id, { andListen = false } = {}) {
+  const b = store.books.get(id);
+  if (!b) return;
+  const file = await files.get(id);
+  if (!file) { toast('Файла этой книги нет на этом устройстве'); return; }
+  if (R) close();
+  const el = $('#reader');
+  setHTML(el, shell(b));
+  el.hidden = false;
+  el.classList.remove('chrome-off');
+  const view = document.createElement('foliate-view');
+  el.insertBefore(view, $('#rFoot'));
+  try {
+    await view.open(file);
+  } catch (err) {
+    el.hidden = true;
+    el.replaceChildren();
+    toast('Книга не открылась: файл повреждён или защищён');
+    return;
+  }
+  R = { id, view, pages: b.pages || 1, max: (b.prog && (b.prog.max || b.prog.f)) || 0, acc: { p: 0, m: 0, l: 0 }, active: Date.now(), tickAt: Date.now(), settled: false, spoken: 0 };
+  view.renderer.addEventListener('relocate', e => onRelocate(e.detail.reason));
+  view.addEventListener('load', e => onLoad(e.detail));
+  view.addEventListener('create-overlay', drawQuotes);
+  view.addEventListener('draw-annotation', e => e.detail.draw(Overlayer.highlight, { color: 'rgba(216,178,90,.45)' }));
+  applyLook();
+  await view.init({ lastLocation: b.prog && b.prog.cfi, showTextStart: true });
+  if (b.status === 'want' || b.status === 'paused') setStatus(id, 'reading');
+  R.timer = setInterval(tick, 15000);
+  if (andListen) listen();
+}
+
+function close() {
+  if (!R) return;
+  stopListening();
+  tick();
+  save();
+  clearInterval(R.timer);
+  try { R.view.close(); } catch (e) { /* already gone */ }
+  R = null;
+  const el = $('#reader');
+  el.hidden = true;
+  el.replaceChildren();
+  applyTheme();
+}
+
+export function install(hooks) {
+  hooks.read = id => open(id);
+  hooks.listen = id => { unlock(); open(id, { andListen: true }); };
+  hooks.importFile = importFile;
+  const el = $('#reader');
+  el.addEventListener('click', e => {
+    const b = e.target.closest('[data-r]');
+    if (b && R && acts[b.dataset.r]) acts[b.dataset.r](b);
+  });
+  el.addEventListener('change', e => { if (e.target.id === 'rSlider' && R) R.view.goToFraction(+e.target.value / 1000); });
+  document.addEventListener('keydown', e => { if (R && !e.target.closest('input,textarea,select')) onKey(e); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden && R) { tick(); save(); } });
+  window.addEventListener('pagehide', () => { if (R) { tick(); save(); } });
+}

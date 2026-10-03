@@ -3,7 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "serve": "python3 -m http.server 8767"
+    "serve": "python3 -m http.server 8767",
+    "vendor": "esbuild tools/firebase-entry.js --bundle --format=esm --minify --target=es2020 --outfile=vendor/firebase.js",
+    "icons": "python3 tools/make_icons.py",
+    "sw": "python3 tools/make_sw.py"
   },
   "devDependencies": {
     "@diffusionstudio/piper-wasm": "1.0.0",
