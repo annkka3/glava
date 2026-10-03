@@ -286,7 +286,7 @@ async function listen() {
   if (R.speaker) { R.speaker.toggle(); return; }
   const b = store.books.get(R.id), s = store.settings;
   const rate = b.speed || s.rate || 1;
-  const sp = new Speaker({ view: R.view, voice: s.voice, rate, meta: { title: b.title, artist: b.author || '', album: 'Глава' } });
+  const sp = new Speaker({ view: R.view, voice: s.voice, rate, lift: s.lift, meta: { title: b.title, artist: b.author || '', album: 'Глава' } });
   R.speaker = sp;
   R.spoken = 0;
   $('#rListen').hidden = false;

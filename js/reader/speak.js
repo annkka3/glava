@@ -64,13 +64,14 @@ export function unlock() {
 }
 
 export class Speaker extends EventTarget {
-  constructor({ view, voice, rate, meta }) {
+  constructor({ view, voice, rate, lift, meta }) {
     super();
     this.view = view;
     this.voice = voice;
     this.meta = meta;
     this.player = shared || (shared = new TtsPlayer());
     this.player.setRate(rate || 1);
+    this.player.rise = lift || 0;
     this.blocks = new Map(); // section index → blocks of the document shown on screen
     this.lastSec = -1;       // last section whose text has been handed to the player
     this.selfMove = 0;       // time of our own page turn, so the reader can tell it from the user's

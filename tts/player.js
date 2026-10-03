@@ -2,6 +2,7 @@
 // A real media element (not Web Audio) is what keeps sound going on a locked iPhone; while the
 // next sentences are still being synthesized, a short silent clip holds the audio session open.
 import { forSpeech } from './text.js';
+import { risingQuestion } from './prosody.js';
 
 const SENTENCE_GAP = 0.22, PARA_GAP = 0.5; // silence after a unit, seconds
 const FILLER_SEC = 0.3;
@@ -29,6 +30,7 @@ export class TtsPlayer extends EventTarget {
     this.voice = null;
     this.sampleRate = 22050;
     this.rate = 1;
+    this.rise = 0.35;         // extra pitch at the end of yes/no questions (0 = leave the voice as it is)
     this.aheadSec = 75;       // synthesized but not yet played speech to keep in hand
     this.maxSegmentSec = 30;  // longest clip handed to the audio element
     this.state = 'idle';      // idle | loading | buffering | playing | paused | ended
@@ -209,7 +211,8 @@ export class TtsPlayer extends EventTarget {
     while (this._inFlight < 2 && this._has(this._requested) && this._aheadSec() < this.aheadSec) {
       const i = this._requested++;
       this._inFlight++;
-      this.worker.postMessage({ type: 'synth', id: i, gen: this._gen, text: forSpeech(this._unit(i).text) });
+      const text = this._unit(i).text;
+      this.worker.postMessage({ type: 'synth', id: i, gen: this._gen, text: forSpeech(text), rise: this.rise && risingQuestion(text) ? this.rise : 0 });
     }
     if (this.more && !this.loop && !this._lowSent && this.units.length - this._requested < 8) {
       this._lowSent = true;

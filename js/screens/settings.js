@@ -34,8 +34,11 @@ function body() {
     <div class="stepper"><button data-act="goal" data-k="${k}" data-d="${-step}" ${s.goals[k] <= min ? 'disabled' : ''} aria-label="Меньше">−</button><output>${s.goals[k] || 'нет'}</output><button data-act="goal" data-k="${k}" data-d="${step}" ${s.goals[k] >= max ? 'disabled' : ''} aria-label="Больше">+</button></div></div>`)}
   <p class="tiny muted">Кольцо страниц и кольцо минут закрываются отдельно. День идёт в зачёт главы, когда закрыто хотя бы одно.</p>
 </section>
-<section class="stack"><p class="eyebrow">Голос для чтения вслух</p>${seg('voice', s.voice, [['ru_RU-irina-medium', 'Ирина'], ['ru_RU-dmitri-medium', 'Дмитрий']])}
-  <p class="tiny muted">Скорость настраивается в читалке и запоминается для каждой книги.</p></section>
+<section class="stack"><p class="eyebrow">Голос для чтения вслух</p>${seg('voice', s.voice, [['ru_RU-irina-medium', 'Ирина'], ['ru_RU-dmitri-medium', 'Дмитрий'], ['ru_RU-ruslan-medium', 'Руслан']])}
+  <p class="tiny muted">Каждый голос скачивается один раз (63 МБ). Скорость настраивается в читалке и запоминается для каждой книги.</p>
+  <div class="row between"><span>Тон в конце вопроса</span></div>
+  ${seg('lift', String(s.lift), [['0', 'Как есть'], ['0.35', 'Мягко'], ['0.6', 'Сильнее']])}
+  <p class="tiny muted">Ирина и Дмитрий читают вопросы ровно, поэтому приложение само поднимает тон в конце. Руслан задаёт вопросы сам, ему это не нужно.</p></section>
 ${account.render ? html`<section class="stack"><p class="eyebrow">Аккаунт и синхронизация</p>${account.render()}</section>` : ''}
 <section class="stack"><p class="eyebrow">Данные</p>
   <div class="row"><button class="btn" data-act="import">Загрузить из файла</button><button class="btn" data-act="export">Сохранить копию</button></div>
@@ -52,7 +55,7 @@ export function openSettings() {
   openSheet({
     title: 'Настройки', body: body(), onClose: () => { off(); account.changed = () => {}; },
     acts: {
-      set: el => { store.setSettings({ [el.dataset.k]: el.dataset.v }); if (el.dataset.k === 'theme') applyTheme(); },
+      set: el => { store.setSettings({ [el.dataset.k]: el.dataset.k === 'lift' ? +el.dataset.v : el.dataset.v }); if (el.dataset.k === 'theme') applyTheme(); },
       goal: el => {
         const [, , min, max] = GOALS.find(g => g[0] === el.dataset.k);
         const cur = store.settings.goals[el.dataset.k];

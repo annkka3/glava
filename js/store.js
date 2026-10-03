@@ -11,6 +11,7 @@ const DEFAULTS = {
   reader: { theme: 'auto', font: 'serif', size: 19, line: 1.5, margin: 22, flow: 'paginated', justify: true },
   voice: 'ru_RU-irina-medium',
   rate: 1,
+  lift: 0.35, // question tone added to voices that lack it: 0 | 0.35 | 0.6
   ritm: { on: false, item: '' },
 };
 

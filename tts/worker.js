@@ -2,17 +2,20 @@
 // Everything it needs is served by the app itself and kept in Cache Storage, so after the first load it works offline.
 import * as ort from '../vendor/ort/ort.wasm.bundle.min.mjs';
 import createPiperPhonemize from '../vendor/piper/piper_phonemize.mjs';
+import { questionLift } from './prosody.js';
 
 const ROOT = new URL('../', import.meta.url);
 const CACHE = 'glava-voice-v1';
 const SIZE = { phonData: 18077249, runtime: 14239897, voice: 63201294 };
 const GAIN = 2.0; // Piper voices come out quiet; lift them, but never past full scale.
+// Voices that already end a question on a rising tone by themselves (no help needed).
+const NATIVE_QUESTIONS = new Set(['ru_RU-ruslan-medium']);
 
 ort.env.wasm.numThreads = 1; // GitHub Pages cannot send the headers threads need; one thread is fast enough.
 
 let phon = null;
 const phonOut = [];
-let session = null, cfg = null;
+let session = null, cfg = null, voiceId = '';
 let gen = 0, busy = false;
 const jobs = [];
 
@@ -78,6 +81,7 @@ async function loadVoice(id) {
   post({ type: 'progress', stage: 'start', loaded: 0, total: 0 });
   if (session) { try { await session.release(); } catch (e) {} session = null; }
   session = await ort.InferenceSession.create(new Uint8Array(model), { executionProviders: ['wasm'], graphOptimizationLevel: 'all' });
+  voiceId = id;
   return { voice: id, sampleRate: cfg.audio.sample_rate, ms: Math.round(performance.now() - t0) };
 }
 
@@ -91,7 +95,7 @@ function phonemize(text) {
   return ids;
 }
 
-async function synth(text, lengthScale) {
+async function synth(text, lengthScale, rise) {
   const ids = phonemize(text);
   if (!ids.length) return new Int16Array(0);
   const inf = cfg.inference || {};
@@ -102,7 +106,8 @@ async function synth(text, lengthScale) {
   };
   if ((cfg.num_speakers || 1) > 1) feeds.sid = new ort.Tensor('int64', BigInt64Array.from([0n]), [1]);
   const out = await session.run(feeds);
-  const wave = out[session.outputNames[0]].data;
+  let wave = out[session.outputNames[0]].data;
+  if (rise && !NATIVE_QUESTIONS.has(voiceId)) wave = questionLift(wave, cfg.audio.sample_rate, rise);
   let peak = 0;
   for (let i = 0; i < wave.length; i++) { const a = wave[i] < 0 ? -wave[i] : wave[i]; if (a > peak) peak = a; }
   const gain = peak > 0 ? Math.min(GAIN, 0.97 / peak) : 1;
@@ -121,7 +126,7 @@ async function pump() {
         post({ type: 'ready', ...(await loadVoice(job.voice)) });
       } else if (job.gen === gen) {
         const t0 = performance.now();
-        const pcm = await synth(job.text, job.lengthScale);
+        const pcm = await synth(job.text, job.lengthScale, job.rise);
         if (job.gen === gen) post({ type: 'audio', id: job.id, gen: job.gen, pcm, sampleRate: cfg.audio.sample_rate, ms: performance.now() - t0 }, [pcm.buffer]);
       }
     } catch (err) {
