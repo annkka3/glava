@@ -5,6 +5,7 @@ import * as M from '../model.js';
 import { ICON } from '../ui.js';
 import { bookRow } from './library.js';
 import { openCard, summaryCard } from '../cards.js';
+import { openMarks, openQuotes } from './notes.js';
 
 const view = { mode: 'month', anchor: today() };
 
@@ -132,6 +133,10 @@ export function render() {
 <section class="card">${chart(r)}<p class="tiny muted">Дней с чтением: ${t.days}, с закрытым кольцом: ${t.closed}</p></section>
 ${view.mode === 'month' ? html`<section class="card">${calendar(r)}</section>` : ''}
 ${summary(r, t, done)}
+<section class="row">
+  <button class="btn" data-act="marks">Мои закладки · ${[...store.books.values()].reduce((n, b) => n + (b.marks || []).length, 0)}</button>
+  <button class="btn" data-act="quotes">Мои цитаты · ${store.quotes.size}</button>
+</section>
 <section class="card plain">
   <div class="row between"><span class="small muted">Сейчас подряд</span><span class="numeral" style="font-size:24px">${count(M.streak(), PL.days)}</span></div>
   <div class="divider"></div>
@@ -145,5 +150,7 @@ ${done.length ? html`<section class="stack" style="gap:6px"><p class="eyebrow">�
 export const acts = {
   mode: el => { view.mode = el.dataset.m; return true; },
   shift: el => { shift(+el.dataset.d); return true; },
+  marks: () => openMarks(),
+  quotes: () => openQuotes(),
   card: () => { const f = facts(); openCard({ title: f.eyebrow, file: f.file, make: opts => summaryCard(f, opts) }); },
 };

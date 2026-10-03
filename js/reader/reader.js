@@ -1,6 +1,6 @@
 // The reader: opens a book file with foliate-js, applies the reading settings, tracks progress,
 // pages and minutes, saves quotes from selected text, and hosts the listening bar.
-import { $, html, raw, setHTML, today, count, PL, uid, debounce } from '../util.js';
+import { $, html, raw, setHTML, today, count, plural, PL, uid, debounce } from '../util.js';
 import { store } from '../store.js';
 import * as M from '../model.js';
 import { files } from '../files.js';
@@ -151,7 +151,7 @@ const shell = b => html`
   <button data-r="look" aria-label="Настройки чтения" style="font-family:var(--f-display);font-size:21px;font-weight:600">Аа</button>
   <button data-r="listen" aria-label="Слушать">${ICON.ear}</button>
 </div>
-<div class="r-foot" id="rFoot"></div>
+<button class="r-foot" id="rFoot" data-r="progress" aria-label="Вид прогресса чтения"></button>
 <div class="r-bar r-bottom">
   <input type="range" id="rSlider" min="0" max="1000" step="1" value="0" aria-label="Место в книге">
   <div class="r-meta"><span id="rPage"></span><span id="rLeft"></span></div>
@@ -188,10 +188,11 @@ function paint() {
   const marked = markAt(f) >= 0;
   $('#rMark').classList.toggle('on', marked);
   $('#rMark').setAttribute('aria-pressed', String(marked));
-  $('#rFoot').textContent = `${page} из ${pages}`;
   $('#rPage').textContent = `стр. ${page} из ${pages} · ${Math.round(local * 100)} %`;
   const t = R.loc.time;
   const left = t && t.total > 0 ? R.pages * (1 - f) * t.section / t.total : 0;
+  R.shown = { chapter: chapterLeft(left), pages: `${page} из ${pages}`, percent: `${Math.round(local * 100)}%` };
+  footer();
   const label = R.loc.tocItem && R.loc.tocItem.label ? R.loc.tocItem.label.trim() : '';
   $('#rLeft').textContent = left >= 0.5 ? `до конца главы ${Math.max(1, Math.round(left / M.pace()))} мин` : label;
 }
@@ -253,6 +254,42 @@ function onRelocate(reason) {
   if (user && R.speaker && R.speaker.playing) R.speaker.sync();
   if (user && reason !== 'scroll') chrome(false);
   if (f >= 0.995 && !R.asked && store.books.get(R.id).status !== 'read') { R.asked = true; $('#rDone').hidden = false; }
+}
+
+/** "24 страницы до конца главы", counted in the same paper-sized pages as everything else. */
+function chapterLeft(left) {
+  const n = Math.round(left);
+  return n >= 1 ? `${n} ${plural(n, PL.pages)} до конца главы` : 'последняя страница главы';
+}
+
+const PROGRESS = {
+  'chapter-pages': s => [s.chapter, s.pages],
+  'chapter-percent': s => [s.chapter, s.percent],
+  pages: s => [s.pages],
+  percent: s => [s.percent],
+};
+
+/** The line under the page, in the form chosen in «Вид прогресса чтения». */
+function footer() {
+  if (!R || !R.shown) return;
+  const kind = PROGRESS[store.settings.reader.progress] ? store.settings.reader.progress : 'chapter-pages';
+  const parts = PROGRESS[kind](R.shown), el = $('#rFoot');
+  el.classList.toggle('mid', parts.length === 1);
+  setHTML(el, html`${parts.map(x => html`<span>${x}</span>`)}`);
+}
+
+function openProgress() {
+  const body = () => {
+    const cur = store.settings.reader.progress || 'chapter-pages', s = R.shown || { chapter: '24 страницы до конца главы', pages: '5 из 497', percent: '1%' };
+    return html`<div class="pick" role="radiogroup">${Object.entries(PROGRESS).map(([k, fn]) => {
+      const parts = fn(s);
+      return html`<button class="${cur === k ? 'on' : ''} ${parts.length === 1 ? 'mid' : ''}" data-act="pick" data-v="${k}" role="radio" aria-checked="${cur === k}">${parts.map(x => html`<span>${x}</span>`)}</button>`;
+    })}</div>`;
+  };
+  openSheet({
+    title: 'Вид прогресса чтения', body: body(),
+    acts: { pick: el => { store.setSettings({ reader: { progress: el.dataset.v } }); footer(); updateSheet(body()); } },
+  });
 }
 
 /** Move the credit to another work of a collected volume (or back to the volume itself). */
@@ -403,6 +440,7 @@ ${Object.entries(THEMES).map(([k, t]) => html`<button class="${r.theme === k ? '
 <div class="wrap">${Object.entries(FONTS).map(([k, [name, css]]) => html`<button class="chip ${(FONTS[r.font] ? r.font : 'literata') === k ? 'on' : ''}" data-act="font" data-v="${k}" style="font-family:${css || 'inherit'};font-size:15px">${name}</button>`)}</div>
 ${step('size', 'Размер', r.size, r.size)}
 ${step('line', 'Межстрочный интервал', r.line, String(r.line).replace('.', ','))}</section>
+<section class="stack"><p class="eyebrow">Прогресс внизу страницы</p><div class="row"><button class="btn quiet" data-act="progress">Выбрать вид</button></div></section>
 <section class="stack"><p class="eyebrow">Страница</p>
 <div class="seg" role="group" aria-label="Поля">${[['narrow', 'Узкие поля'], ['normal', 'Средние'], ['wide', 'Широкие']].map(([k, v]) => html`<button class="${(r.margins || 'normal') === k ? 'on' : ''}" data-act="set" data-k="margins" data-v="${k}">${v}</button>`)}</div>
 <div class="seg" role="group" aria-label="Листание">${[['paginated', 'Страницы'], ['scrolled', 'Лента']].map(([k, v]) => html`<button class="${(r.flow || 'paginated') === k ? 'on' : ''}" data-act="set" data-k="flow" data-v="${k}">${v}</button>`)}</div>
@@ -414,6 +452,7 @@ function openLook() {
   openSheet({
     title: 'Вид страницы', body: lookBody(),
     acts: {
+      progress: () => openProgress(),
       theme: el => set({ theme: el.dataset.v }),
       font: el => set({ font: el.dataset.v }),
       set: el => set({ [el.dataset.k]: el.dataset.k === 'justify' ? !!el.dataset.v : el.dataset.v }),
@@ -500,6 +539,7 @@ ${mine.length ? html`<section class="stack" style="gap:4px"><p class="eyebrow">�
 const acts = {
   close: () => close(),
   toc: () => openToc(),
+  progress: () => openProgress(),
   mark: () => toggleMark(),
   look: () => openLook(),
   listen: () => (R.speaker ? stopListening() : listen()),
@@ -524,7 +564,7 @@ const acts = {
   'l-faster': () => R.speaker && changeRate(0.1),
 };
 
-async function open(id, { andListen = false } = {}) {
+async function open(id, { andListen = false, at = null } = {}) {
   const b = store.books.get(id);
   if (!b) return;
   const hostId = b.src && files.has(b.src.book) ? b.src.book : id;
@@ -554,7 +594,7 @@ async function open(id, { andListen = false } = {}) {
   view.addEventListener('create-overlay', drawQuotes);
   view.addEventListener('draw-annotation', e => e.detail.draw(Overlayer.highlight, { color: 'rgba(216,178,90,.45)' }));
   applyLook();
-  await view.init({ lastLocation: hostId !== id ? ((b.prog && b.prog.cfi) || b.src.href) : (host.prog && host.prog.cfi), showTextStart: true });
+  await view.init({ lastLocation: at || (hostId !== id ? ((b.prog && b.prog.cfi) || b.src.href) : (host.prog && host.prog.cfi)), showTextStart: true });
   if (!R.parts && (b.status === 'want' || b.status === 'paused')) setStatus(id, 'reading');
   R.timer = setInterval(tick, 15000);
   if (andListen) listen();
@@ -575,7 +615,7 @@ function close() {
 }
 
 export function install(hooks) {
-  hooks.read = id => open(id);
+  hooks.read = (id, at) => open(id, { at });
   hooks.listen = id => { unlock(); open(id, { andListen: true }); };
   hooks.importFile = importFile;
   hooks.scan = rescan;
