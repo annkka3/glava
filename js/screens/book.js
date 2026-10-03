@@ -5,6 +5,7 @@ import { store } from '../store.js';
 import * as M from '../model.js';
 import { files } from '../files.js';
 import { ICON, cover, bar, openSheet, updateSheet, closeSheet, toast } from '../ui.js';
+import { openCard, quoteCard } from '../cards.js';
 
 export const KIND = { novel: 'Роман', novella: 'Повесть', story: 'Рассказ', stories: 'Сборник рассказов', play: 'Пьеса', poetry: 'Поэзия', epic: 'Эпос', nonfiction: 'Нон-фикшн', series: 'Цикл' };
 export const STATUS = { want: 'Хочу', reading: 'Читаю', read: 'Прочитано', paused: 'Отложено' };
@@ -79,7 +80,7 @@ ${p && b.status !== 'read' ? html`<p class="small muted">${p.late ? 'Срок п
   ${quotes.length ? quotes.map(([qid, q]) => html`<div class="card plain" style="padding:12px 14px;gap:6px">
     <p style="font-family:var(--f-display);font-size:19px;line-height:1.3">${q.text}</p>
     ${q.note ? html`<p class="tiny muted">${q.note}</p>` : ''}
-    <div class="row between tiny muted"><span>${q.at ? fmtDay(q.at) : ''}${q.where ? ' · ' + q.where : ''}</span><button class="chip" data-act="quote-del" data-id="${qid}">удалить</button></div>
+    <div class="row between tiny muted"><span>${q.at ? fmtDay(q.at) : ''}${q.where ? ' · ' + q.where : ''}</span><span class="row" style="gap:6px"><button class="chip" data-act="quote-card" data-id="${qid}">картинкой</button><button class="chip" data-act="quote-del" data-id="${qid}">удалить</button></span></div>
   </div>`) : html`<p class="small muted">Пока нет. В читалке цитата сохраняется выделением текста.</p>`}
 </div>
 <div class="stack" style="gap:8px">
@@ -109,6 +110,10 @@ export function openBook(id) {
       'col-open': el => { closeSheet(); location.hash = '#col/' + el.dataset.id; },
       'quote-add': () => openQuote(id),
       'quote-del': el => store.remove('quotes', el.dataset.id),
+      'quote-card': el => {
+        const q = store.quotes.get(el.dataset.id), b = store.books.get(id);
+        if (q) openCard({ title: 'Цитата картинкой', file: 'glava-citata.png', make: opts => quoteCard({ text: q.text, title: b.title, author: b.author || '' }, opts), onClose: () => openBook(id) });
+      },
       edit: () => openEdit(id),
       delete: el => {
         if (!armed) { armed = true; el.textContent = 'Точно удалить?'; return; }

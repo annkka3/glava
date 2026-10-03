@@ -1,9 +1,10 @@
 // «Итоги»: pages, time and finished books for a week, a month or a year, with a calendar of lit days.
-import { html, today, addDays, parse, toStr, weekday, daysInMonth, MONTHS_NOM, MONTHS_OF, DAYS_SHORT, fmtDay, fmtMin, count, PL, num } from '../util.js';
+import { html, today, addDays, parse, toStr, weekday, daysInMonth, MONTHS_NOM, MONTHS_OF, DAYS_SHORT, fmtDay, fmtMin, count, plural, PL, num } from '../util.js';
 import { store } from '../store.js';
 import * as M from '../model.js';
 import { ICON } from '../ui.js';
 import { bookRow } from './library.js';
+import { openCard, summaryCard } from '../cards.js';
 
 const view = { mode: 'month', anchor: today() };
 
@@ -79,7 +80,36 @@ function summary(r, t, done) {
     bestDay && bestDay[1] > 0 ? `Самый читающий день: ${fmtDay(bestDay[0])}, ${count(Math.round(bestDay[1]), PL.pages)}.` : '',
     fav ? `Чаще всего: ${fav[0].toLowerCase()}.` : '',
   ].filter(Boolean);
-  return html`<section class="card"><p class="eyebrow">Итоги ${name}</p>${lines.map(l => html`<p>${l}</p>`)}</section>`;
+  return html`<section class="card"><p class="eyebrow">Итоги ${name}</p>${lines.map(l => html`<p>${l}</p>`)}
+${view.mode === 'week' ? '' : html`<div class="row"><button class="btn" data-act="card">Карточка итогов</button></div>`}</section>`;
+}
+
+/** What goes on the shareable card of the shown month or year. */
+function facts() {
+  const r = range(), t = M.totals(r.from, r.to), d = parse(r.from), year = view.mode === 'year';
+  const done = M.finishedIn(r.from, r.to).filter(([, b]) => M.countsAsBook(b)).reverse();
+  const hours = t.m / 60, streakDays = M.bestStreakIn(r.from, r.to), medals = M.medalsIn(r.from, r.to), pages = Math.round(t.p);
+  const genres = {};
+  for (const [, b] of done) for (const g of (b.genres || []).slice(0, 1)) genres[g] = (genres[g] || 0) + 1;
+  const fav = Object.entries(genres).sort((a, b) => b[1] - a[1])[0];
+  let bestDay = null;
+  for (const [date, x] of store.days) if (date >= r.from && date <= r.to && (!bestDay || (x.p || 0) > bestDay[1])) bestDay = [date, x.p || 0];
+  return {
+    eyebrow: year ? 'Итоги года' : 'Итоги месяца',
+    title: year ? String(d.getFullYear()) : MONTHS_NOM[d.getMonth()],
+    sub: year ? 'год в книгах' : String(d.getFullYear()),
+    kpis: [
+      [done.length, plural(done.length, ['книга', 'книги', 'книг'])],
+      [num(pages), plural(pages, PL.pages)],
+      hours >= 1 ? [hours.toFixed(hours >= 10 ? 0 : 1).replace('.', ','), 'часов чтения'] : [Math.round(t.m), 'минут чтения'],
+      [t.days, plural(t.days, ['день с книгой', 'дня с книгой', 'дней с книгой'])],
+      [streakDays, plural(streakDays, ['день подряд', 'дня подряд', 'дней подряд'])],
+      [medals, plural(medals, PL.medals)],
+    ],
+    books: done.map(([, b]) => ({ title: b.title, author: b.author || '' })),
+    notes: [fav ? `Чаще всего: ${fav[0].toLowerCase()}` : '', bestDay && bestDay[1] > 0 ? `Самый читающий день: ${fmtDay(bestDay[0])}, ${count(Math.round(bestDay[1]), PL.pages)}` : ''].filter(Boolean),
+    file: year ? `glava-${d.getFullYear()}.png` : `glava-${r.from.slice(0, 7)}.png`,
+  };
 }
 
 export function render() {
@@ -115,4 +145,5 @@ ${done.length ? html`<section class="stack" style="gap:6px"><p class="eyebrow">�
 export const acts = {
   mode: el => { view.mode = el.dataset.m; return true; },
   shift: el => { shift(+el.dataset.d); return true; },
+  card: () => { const f = facts(); openCard({ title: f.eyebrow, file: f.file, make: opts => summaryCard(f, opts) }); },
 };

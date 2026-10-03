@@ -57,6 +57,18 @@ export function bestStreak() {
   return best;
 }
 
+/** Longest run of closed days inside a date range. */
+export function bestStreakIn(from, to) {
+  let best = 0, run = 0, prev = null;
+  for (const date of [...store.days.keys()].sort()) {
+    if (date < from || date > to || !dayClosed(date)) continue;
+    run = prev && addDays(prev, 1) === date ? run + 1 : 1;
+    best = Math.max(best, run);
+    prev = date;
+  }
+  return best;
+}
+
 /** Totals for an inclusive date range. */
 export function totals(from, to) {
   const t = { p: 0, m: 0, l: 0, days: 0, closed: 0 };
@@ -179,6 +191,12 @@ export function medals() {
   const earned = (store.meta.get('medals') || {}).earned || {};
   for (const m of out) { m.done = m.have >= m.need; m.date = earned[m.id] || null; }
   return out;
+}
+
+/** How many medals were earned inside a date range. */
+export function medalsIn(from, to) {
+  const earned = (store.meta.get('medals') || {}).earned || {};
+  return Object.values(earned).filter(d => d >= from && d <= to).length;
 }
 
 /** Record medals that have just been reached; returns the new ones (for the celebration). */

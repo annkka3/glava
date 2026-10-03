@@ -9,12 +9,14 @@ const RANK = { want: 0, paused: 1, reading: 2, read: 3 };
 async function importSeed(data) {
   const entries = [];
   let added = 0;
-  for (const { id, ...book } of data.books || []) {
+  for (const { id, fix, ...book } of data.books || []) {
     if (!id || !book.title) continue;
     const cur = store.books.get(id);
     if (cur) {
       const mine = Object.fromEntries(KEEP.filter(k => cur[k] != null).map(k => [k, cur[k]]));
-      const status = (RANK[cur.status] || 0) >= (RANK[book.status] || 0) ? cur.status : book.status;
+      // `fix` marks a correction to an earlier list: it wins over an undated mark that came from that list.
+      const corrected = fix && !cur.finishedAt && cur.status !== 'reading';
+      const status = corrected ? book.status : (RANK[cur.status] || 0) >= (RANK[book.status] || 0) ? cur.status : book.status;
       entries.push(['books', id, { ...book, ...mine, status }]);
     } else {
       entries.push(['books', id, { ...book, status: book.status || 'want', added: today() }]);
