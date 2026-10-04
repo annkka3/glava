@@ -36,7 +36,7 @@
 
 *{box-sizing:border-box}
 [hidden]{display:none!important}
-html{-webkit-text-size-adjust:100%;background:var(--bg);height:100%}
+html{-webkit-text-size-adjust:100%;background:var(--status-bg,var(--bg));height:100%}
 body{margin:0;min-height:100%;color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.45;font-variant-numeric:lining-nums;-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent;overscroll-behavior-y:none;
   background-color:var(--bg);
   background-image:repeating-linear-gradient(0deg,var(--weave-a) 0 1px,transparent 1px 3px),repeating-linear-gradient(90deg,var(--weave-b) 0 1px,transparent 1px 3px)}
@@ -211,6 +211,9 @@ dialog.sheet::backdrop{background:var(--backdrop)}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 
 /* ---------- reader ---------- */
+/* while a book is open the whole page behind it takes the page colour: iPhone tints the strip under
+   the clock from what lies behind it */
+body.reading{background:var(--status-bg) !important}
 #reader{position:fixed;inset:0;z-index:20;background:var(--r-bg,#0F2B24);color:var(--r-fg,#E9E1CC);display:flex;flex-direction:column;overflow:hidden;padding-top:env(safe-area-inset-top,0px)}
 #reader foliate-view{flex:1 1 auto;min-height:0;display:block}
 .r-bar{position:absolute;left:0;right:0;z-index:2;background:var(--r-bg);transition:transform .2s ease,opacity .2s ease}

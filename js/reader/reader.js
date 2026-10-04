@@ -139,6 +139,7 @@ function applyLook() {
   const meta = $('meta[name="theme-color"]');
   if (meta) meta.content = th.bg;
   document.documentElement.style.setProperty('--status-bg', th.bg);
+  document.body.classList.add('reading');
 }
 
 // ---------- shell ----------
@@ -618,6 +619,7 @@ async function open(id, { andListen = false, at = null } = {}) {
 
 function close() {
   document.documentElement.style.removeProperty('--status-bg');
+  document.body.classList.remove('reading');
   if (!R) return;
   stopListening();
   tick();
