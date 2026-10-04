@@ -134,7 +134,7 @@ function applyLook() {
   v.setAttribute('gap', GAPS[r.margins] || GAPS.normal);
   v.setAttribute('max-inline-size', '680px');
   v.setAttribute('max-column-count', innerWidth >= 900 ? '2' : '1');
-  v.setAttribute('margin', '46px');
+  v.setAttribute('margin', '44px');
   v.setStyles(bookCSS(r, th));
   const meta = $('meta[name="theme-color"]');
   if (meta) meta.content = th.bg;
@@ -226,6 +226,9 @@ function onRelocate(reason) {
   R.loc = loc;
   const f = loc.fraction || 0;
   const user = reason === 'page' || reason === 'snap' || reason === 'scroll';
+  // Every touch ends with a 'snap' back onto the page, even a tap that turned nothing:
+  // only a real move to another page may hide the bars or move the voice.
+  const moved = R.lastF == null || Math.abs(f - R.lastF) > 1e-6;
   if (R.parts) {
     let part = partAt(R.parts, f);
     if (R.pin) {
@@ -249,8 +252,8 @@ function onRelocate(reason) {
   paint();
   saveSoon();
   R.lastF = f;
-  if (user && R.speaker && R.speaker.playing) R.speaker.sync();
-  if (user && reason !== 'scroll') chrome(false);
+  if (user && moved && R.speaker && R.speaker.playing) R.speaker.sync();
+  if (user && moved && reason !== 'scroll') chrome(false);
   if (f >= 0.995 && !R.asked && store.books.get(R.id).status !== 'read') { R.asked = true; $('#rDone').hidden = false; }
 }
 
@@ -343,24 +346,30 @@ function onLoad({ doc, index }) {
     R.sel = ok ? { range: sel.getRangeAt(0).cloneRange(), text: sel.toString().replace(/\s+/g, ' ').trim(), index } : null;
     $('#rQuote').hidden = !ok;
   }, 250));
-  // Taps are read from pointer events: on iPhone a tap on plain text sends no click to the document.
-  // A tap is a short touch that hardly moves; a swipe turns the page by itself, a long press selects.
+  // A tap is taken from whichever arrives first: the click (what iPhone sends for a tap) or a short,
+  // still pointer touch (for places where no click comes). The other one of the pair is ignored.
   let down = null;
-  doc.addEventListener('pointerdown', e => { down = e.isPrimary ? { x: e.clientX, y: e.clientY, t: Date.now() } : null; });
+  const onTap = (cx, cy, target) => {
+    if (!R || Date.now() - R.tapAt < 450) return;
+    if (target && target.closest && target.closest('a[href]')) return;
+    const sel = doc.getSelection();
+    if (sel && !sel.isCollapsed) return;
+    R.tapAt = Date.now();
+    const rect = doc.defaultView.frameElement ? doc.defaultView.frameElement.getBoundingClientRect() : { left: 0, top: 0 };
+    const x = rect.left + cx, y = rect.top + cy;
+    if (store.settings.reader.flow === 'scrolled') { chrome(); return; }
+    if (y < innerHeight * 0.14) chrome(); // the top strip always toggles the bars, as a way back to them
+    else if (x < innerWidth * 0.25) R.view.prev();
+    else if (x > innerWidth * 0.75) R.view.next();
+    else chrome();
+  };
+  doc.addEventListener('click', e => { if (!e.defaultPrevented) onTap(e.clientX, e.clientY, e.target); });
+  doc.addEventListener('pointerdown', e => { down = e.isPrimary !== false ? { x: e.clientX, y: e.clientY, t: Date.now() } : null; });
   doc.addEventListener('pointercancel', () => { down = null; });
   doc.addEventListener('pointerup', e => {
     const d = down;
     down = null;
-    if (!R || !d || Date.now() - d.t > 400 || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 12) return;
-    if (e.target.closest && e.target.closest('a[href]')) return;
-    const sel = doc.getSelection();
-    if (sel && !sel.isCollapsed) return;
-    const frame = doc.defaultView.frameElement;
-    const x = (frame ? frame.getBoundingClientRect().left : 0) + e.clientX;
-    if (store.settings.reader.flow === 'scrolled') { chrome(); return; }
-    if (x < innerWidth * 0.25) R.view.prev();
-    else if (x > innerWidth * 0.75) R.view.next();
-    else chrome();
+    if (d && Date.now() - d.t < 400 && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 12) onTap(e.clientX, e.clientY, e.target);
   });
   doc.addEventListener('keydown', onKey);
 }
@@ -594,7 +603,7 @@ async function open(id, { andListen = false, at = null } = {}) {
   }
   const hostMax = (host.prog && (host.prog.max || host.prog.f)) || 0;
   R = { host: hostId, id: hostId, part: null, parts: host.parts && host.parts.length ? host.parts : null, pin: hostId !== id ? id : null,
-    view, pages: host.pages || 1, max: hostMax, hostMax, lastF: null, acc: { p: 0, m: 0, l: 0 }, active: Date.now(), tickAt: Date.now(), settled: false, spoken: 0 };
+    view, pages: host.pages || 1, tapAt: 0, max: hostMax, hostMax, lastF: null, acc: { p: 0, m: 0, l: 0 }, active: Date.now(), tickAt: Date.now(), settled: false, spoken: 0 };
   view.renderer.addEventListener('relocate', e => onRelocate(e.detail.reason));
   view.addEventListener('load', e => onLoad(e.detail));
   view.addEventListener('create-overlay', drawQuotes);

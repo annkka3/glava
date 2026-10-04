@@ -210,7 +210,7 @@ dialog.sheet::backdrop{background:var(--backdrop)}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 
 /* ---------- reader ---------- */
-#reader{position:fixed;inset:0;z-index:20;background:var(--r-bg,#0F2B24);color:var(--r-fg,#E9E1CC);display:flex;flex-direction:column;overflow:hidden;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+#reader{position:fixed;inset:0;z-index:20;background:var(--r-bg,#0F2B24);color:var(--r-fg,#E9E1CC);display:flex;flex-direction:column;overflow:hidden;padding-top:env(safe-area-inset-top,0px)}
 #reader foliate-view{flex:1 1 auto;min-height:0;display:block}
 .r-bar{position:absolute;left:0;right:0;z-index:2;background:var(--r-bg);transition:transform .2s ease,opacity .2s ease}
 .r-top{top:0;padding:calc(6px + env(safe-area-inset-top,0px)) 8px 6px;display:flex;align-items:center;gap:2px;border-bottom:1px solid var(--r-line)}
@@ -224,7 +224,8 @@ dialog.sheet::backdrop{background:var(--backdrop)}
 .r-meta{flex:0 0 auto;font-size:12px;line-height:16px;color:var(--r-muted);font-variant-numeric:tabular-nums}
 #reader.chrome-off .r-top{transform:translateY(-100%);opacity:0;pointer-events:none}
 #reader.chrome-off .r-bottom{transform:translateY(100%);opacity:0;pointer-events:none}
-.r-foot{position:absolute;left:0;right:0;bottom:env(safe-area-inset-bottom,0px);height:34px;padding:0 22px;display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px;color:var(--r-muted);font-variant-numeric:tabular-nums;z-index:1;background:none;border:0;width:100%;cursor:pointer}
+/* the page runs down into the home-indicator zone; the progress line sits just above the indicator bar */
+.r-foot{position:absolute;left:0;right:0;bottom:max(4px,calc(env(safe-area-inset-bottom,0px) * 0.45));height:24px;padding:0 22px;display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px;color:var(--r-muted);font-variant-numeric:tabular-nums;z-index:1;background:none;border:0;width:100%;cursor:pointer}
 .r-foot.mid{justify-content:center}
 .r-foot span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pick{display:flex;flex-direction:column;gap:10px}
