@@ -154,7 +154,7 @@ const shell = b => html`
 <button class="r-foot" id="rFoot" data-r="progress" aria-label="Вид прогресса чтения"></button>
 <div class="r-bar r-bottom">
   <input type="range" id="rSlider" min="0" max="1000" step="1" value="0" aria-label="Место в книге">
-  <div class="r-meta"><span id="rPage"></span><span id="rLeft"></span></div>
+  <span class="r-meta" id="rPage"></span>
 </div>
 <button class="r-quote" id="rQuote" data-r="quote" hidden>${ICON.quote}Сохранить цитату</button>
 <div class="r-done card" id="rDone" hidden>
@@ -188,13 +188,11 @@ function paint() {
   const marked = markAt(f) >= 0;
   $('#rMark').classList.toggle('on', marked);
   $('#rMark').setAttribute('aria-pressed', String(marked));
-  $('#rPage').textContent = `стр. ${page} из ${pages} · ${Math.round(local * 100)} %`;
+  $('#rPage').textContent = `${page} из ${pages}`;
   const t = R.loc.time;
   const left = t && t.total > 0 ? R.pages * (1 - f) * t.section / t.total : 0;
   R.shown = { chapter: chapterLeft(left), pages: `${page} из ${pages}`, percent: `${Math.round(local * 100)}%` };
   footer();
-  const label = R.loc.tocItem && R.loc.tocItem.label ? R.loc.tocItem.label.trim() : '';
-  $('#rLeft').textContent = left >= 0.5 ? `до конца главы ${Math.max(1, Math.round(left / M.pace()))} мин` : label;
 }
 
 // ---------- progress, pages, minutes ----------
@@ -345,15 +343,23 @@ function onLoad({ doc, index }) {
     R.sel = ok ? { range: sel.getRangeAt(0).cloneRange(), text: sel.toString().replace(/\s+/g, ' ').trim(), index } : null;
     $('#rQuote').hidden = !ok;
   }, 250));
-  doc.addEventListener('click', e => {
-    if (!R || e.defaultPrevented || e.target.closest('a[href]')) return;
+  // Taps are read from pointer events: on iPhone a tap on plain text sends no click to the document.
+  // A tap is a short touch that hardly moves; a swipe turns the page by itself, a long press selects.
+  let down = null;
+  doc.addEventListener('pointerdown', e => { down = e.isPrimary ? { x: e.clientX, y: e.clientY, t: Date.now() } : null; });
+  doc.addEventListener('pointercancel', () => { down = null; });
+  doc.addEventListener('pointerup', e => {
+    const d = down;
+    down = null;
+    if (!R || !d || Date.now() - d.t > 400 || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 12) return;
+    if (e.target.closest && e.target.closest('a[href]')) return;
     const sel = doc.getSelection();
     if (sel && !sel.isCollapsed) return;
     const frame = doc.defaultView.frameElement;
     const x = (frame ? frame.getBoundingClientRect().left : 0) + e.clientX;
     if (store.settings.reader.flow === 'scrolled') { chrome(); return; }
-    if (x < innerWidth * 0.28) R.view.prev();
-    else if (x > innerWidth * 0.72) R.view.next();
+    if (x < innerWidth * 0.25) R.view.prev();
+    else if (x > innerWidth * 0.75) R.view.next();
     else chrome();
   });
   doc.addEventListener('keydown', onKey);

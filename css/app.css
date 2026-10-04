@@ -218,9 +218,10 @@ dialog.sheet::backdrop{background:var(--backdrop)}
 .r-top button,.r-listen button.ic{width:44px;height:44px;flex:0 0 44px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--r-accent)}
 .r-top button.on svg{fill:currentColor}
 .r-top svg,.r-listen .ic svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-.r-bottom{bottom:0;padding:10px 20px calc(10px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--r-line);display:flex;flex-direction:column;gap:6px}
-.r-bottom input[type=range]{width:100%;accent-color:var(--r-accent);height:28px;margin:0}
-.r-meta{display:flex;justify-content:space-between;gap:12px;font-size:12px;line-height:16px;color:var(--r-muted);font-variant-numeric:tabular-nums}
+/* one slim row: the slider and the page number (about half the old height) */
+.r-bottom{bottom:0;padding:4px 18px calc(4px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--r-line);display:flex;align-items:center;gap:12px}
+.r-bottom input[type=range]{flex:1 1 auto;min-width:0;accent-color:var(--r-accent);height:28px;margin:0}
+.r-meta{flex:0 0 auto;font-size:12px;line-height:16px;color:var(--r-muted);font-variant-numeric:tabular-nums}
 #reader.chrome-off .r-top{transform:translateY(-100%);opacity:0;pointer-events:none}
 #reader.chrome-off .r-bottom{transform:translateY(100%);opacity:0;pointer-events:none}
 .r-foot{position:absolute;left:0;right:0;bottom:env(safe-area-inset-bottom,0px);height:34px;padding:0 22px;display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px;color:var(--r-muted);font-variant-numeric:tabular-nums;z-index:1;background:none;border:0;width:100%;cursor:pointer}
