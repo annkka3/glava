@@ -40,8 +40,9 @@ html{-webkit-text-size-adjust:100%;background:var(--bg);height:100%}
 body{margin:0;min-height:100%;color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.45;font-variant-numeric:lining-nums;-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent;overscroll-behavior-y:none;
   background-color:var(--bg);
   background-image:repeating-linear-gradient(0deg,var(--weave-a) 0 1px,transparent 1px 3px),repeating-linear-gradient(90deg,var(--weave-b) 0 1px,transparent 1px 3px)}
-/* As a home-screen app the page runs under the status bar, whose text is white: keep a dark band behind it in every theme. */
-body::before{content:"";position:fixed;top:0;left:0;right:0;height:env(safe-area-inset-top,0px);background:#0C241E;z-index:50;pointer-events:none}
+/* The strip under the clock and battery takes the colour of whatever is on screen (the reader sets
+   --status-bg to its page colour), so it does not stand out as a separate band. */
+body::before{content:"";position:fixed;top:0;left:0;right:0;height:env(safe-area-inset-top,0px);background:var(--status-bg,var(--bg));z-index:50;pointer-events:none}
 button,input,select,textarea{font:inherit;color:inherit}
 button{cursor:pointer;background:none;border:0;padding:0}
 button:disabled{cursor:default;opacity:.45}
