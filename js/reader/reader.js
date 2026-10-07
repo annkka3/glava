@@ -128,6 +128,7 @@ aside[epub|type~="endnote"],aside[epub|type~="footnote"],aside[epub|type~="note"
 
 function applyLook() {
   if (!R) return;
+  R.sp = new Map();
   const r = store.settings.reader, th = themeOf(r), el = $('#reader'), v = R.view.renderer;
   for (const [k, val] of [['--r-bg', th.bg], ['--r-fg', th.fg], ['--r-muted', th.muted], ['--r-accent', th.accent], ['--r-line', th.line]]) el.style.setProperty(k, val);
   v.setAttribute('flow', r.flow === 'scrolled' ? 'scrolled' : 'paginated');
@@ -158,6 +159,7 @@ const shell = b => html`
   <input type="range" id="rSlider" min="0" max="1000" step="1" value="0" aria-label="Место в книге">
   <span class="r-meta" id="rPage"></span>
 </div>
+<button class="r-back" id="rBack" data-r="back" hidden>${ICON.back}Вернуться</button>
 <button class="r-quote" id="rQuote" data-r="quote" hidden>${ICON.quote}Сохранить цитату</button>
 <div class="r-done card" id="rDone" hidden>
   <p class="h3">Книга дочитана?</p>
@@ -179,20 +181,48 @@ function chrome(on) {
   el.classList.toggle('chrome-off', on === undefined ? !el.classList.contains('chrome-off') : !on);
 }
 
+/**
+ * Pages counted as screens. Inside the open chapter the renderer knows them exactly; other chapters are
+ * estimated from their length at the rate measured on the chapters already laid out.
+ */
+function screenPages() {
+  const rel = R.rel, sec = R.view.book.sections;
+  if (!rel || !rel.size || rel.index == null || !sec[rel.index]) return null;
+  const n = Math.max(1, Math.round(1 / rel.size));
+  const inSec = Math.min(n, Math.round((rel.fraction || 0) * n) + 1);
+  const size = s => (s && s.linear !== 'no' && s.size > 0 ? s.size : 0);
+  R.sp.set(rel.index, n);
+  let laid = 0, bytes = 0;
+  for (const [i, k] of R.sp) { if (size(sec[i])) { laid += k; bytes += size(sec[i]); } }
+  const rate = laid / Math.max(1, bytes);
+  const est = i => (R.sp.has(i) ? R.sp.get(i) : size(sec[i]) ? Math.max(1, Math.round(size(sec[i]) * rate)) : 0);
+  let before = 0, total = 0;
+  sec.forEach((x, i) => { const k = est(i); total += k; if (i < rel.index) before += k; });
+  return { page: before + inSec, total: Math.max(total, before + n), chapterLeft: n - inSec };
+}
+
 function paint() {
   if (!R || !R.loc) return;
   const f = R.loc.fraction || 0, part = R.part;
   // inside a collected volume the numbers are those of the work, not of the whole file
   const local = part ? Math.min(1, Math.max(0, (f - part.from) / (part.to - part.from))) : f;
-  const pages = part ? (store.books.get(R.id).pages || Math.max(1, Math.round(R.pages * (part.to - part.from)))) : R.pages;
-  const page = Math.min(pages, Math.floor(local * pages) + 1);
+  let pages = part ? (store.books.get(R.id).pages || Math.max(1, Math.round(R.pages * (part.to - part.from)))) : R.pages;
+  let page = Math.min(pages, Math.floor(local * pages) + 1);
+  const t = R.loc.time;
+  let left = t && t.total > 0 ? R.pages * (1 - f) * t.section / t.total : 0;
+  const sp = store.settings.reader.pages !== 'paper' ? screenPages() : null;
+  if (sp) {
+    // pages as screens of this phone with the current font: exact inside the chapter, estimated for the book
+    const from = part ? Math.round(sp.total * part.from) : 0, to = part ? Math.round(sp.total * part.to) : sp.total;
+    pages = Math.max(1, to - from);
+    page = Math.min(pages, Math.max(1, sp.page - from));
+    left = sp.chapterLeft;
+  }
   $('#rSlider').value = Math.round(f * 1000);
   const marked = markAt(f) >= 0;
   $('#rMark').classList.toggle('on', marked);
   $('#rMark').setAttribute('aria-pressed', String(marked));
   $('#rPage').textContent = `${page} из ${pages}`;
-  const t = R.loc.time;
-  const left = t && t.total > 0 ? R.pages * (1 - f) * t.section / t.total : 0;
   R.shown = { chapter: chapterLeft(left), pages: `${page} из ${pages}`, percent: `${Math.round(local * 100)}%` };
   footer();
 }
@@ -284,14 +314,21 @@ function footer() {
 function openProgress() {
   const body = () => {
     const cur = store.settings.reader.progress || 'chapter-pages', s = R.shown || { chapter: '24 страницы до конца главы', pages: '5 из 497', percent: '1%' };
-    return html`<div class="pick" role="radiogroup">${Object.entries(PROGRESS).map(([k, fn]) => {
+    const unit = store.settings.reader.pages === 'paper' ? 'paper' : 'screen';
+    return html`<div class="stack" style="gap:6px"><p class="eyebrow">Какие страницы считать</p>
+<div class="seg" role="group">${[['screen', 'Экраны телефона'], ['paper', 'Печатные']].map(([k, v]) => html`<button class="${unit === k ? 'on' : ''}" data-act="unit" data-v="${k}">${v}</button>`)}</div>
+<p class="tiny muted">${unit === 'screen' ? 'Одна страница — один экран, как ты листаешь. Число зависит от размера шрифта; общее количество в книге — оценка.' : 'Одна страница — примерно страница бумажной книги (1800 знаков), не зависит от шрифта и телефона.'} Статистика и кольца всегда считают печатные страницы.</p></div>
+<div class="pick" role="radiogroup">${Object.entries(PROGRESS).map(([k, fn]) => {
       const parts = fn(s);
       return html`<button class="${cur === k ? 'on' : ''} ${parts.length === 1 ? 'mid' : ''}" data-act="pick" data-v="${k}" role="radio" aria-checked="${cur === k}">${parts.map(x => html`<span>${x}</span>`)}</button>`;
     })}</div>`;
   };
   openSheet({
     title: 'Вид прогресса чтения', body: body(),
-    acts: { pick: el => { store.setSettings({ reader: { progress: el.dataset.v } }); footer(); updateSheet(body()); } },
+    acts: {
+      pick: el => { store.setSettings({ reader: { progress: el.dataset.v } }); footer(); updateSheet(body()); },
+      unit: el => { store.setSettings({ reader: { pages: el.dataset.v } }); paint(); updateSheet(body()); },
+    },
   });
 }
 
@@ -542,10 +579,10 @@ ${marks.length ? html`<section class="stack" style="gap:4px"><p class="eyebrow">
 ${flat.length ? '' : html`<p class="muted">В этой книге нет оглавления.</p>`}</div></section>
 ${mine.length ? html`<section class="stack" style="gap:4px"><p class="eyebrow">Цитаты</p><div class="toc">${mine.map(([qid, q]) => html`<button data-act="quote" data-id="${qid}"><span style="font-family:var(--f-display);font-size:18px;line-height:1.3">${q.text.length > 140 ? q.text.slice(0, 140) + '…' : q.text}</span></button>`)}</div></section>` : ''}`,
     acts: {
-      go: el => { const it = flat[+el.dataset.i]; closeSheet(); if (it && it.href) R.view.goTo(it.href); },
-      mark: el => { const m = marks[+el.dataset.i]; closeSheet(); if (m) R.view.goTo(m.cfi); },
-      quote: el => { const q = store.quotes.get(el.dataset.id); closeSheet(); if (q) R.view.goTo(q.cfi); },
-      found: el => { const it = R.found && R.found[+el.dataset.i]; closeSheet(); if (it) R.view.goTo(it.cfi); },
+      go: el => { const it = flat[+el.dataset.i]; closeSheet(); if (it && it.href) jumpTo(it.href); },
+      mark: el => { const m = marks[+el.dataset.i]; closeSheet(); if (m) jumpTo(m.cfi); },
+      quote: el => { const q = store.quotes.get(el.dataset.id); closeSheet(); if (q) jumpTo(q.cfi); },
+      found: el => { const it = R.found && R.found[+el.dataset.i]; closeSheet(); if (it) jumpTo(it.cfi); },
     },
   });
   $('#sheet').onchange = e => { if (e.target.id === 'rQ') runSearch(e.target.value); };
@@ -553,8 +590,87 @@ ${mine.length ? html`<section class="stack" style="gap:4px"><p class="eyebrow">�
 
 // ---------- open / close ----------
 
+// ---------- links and footnotes ----------
+
+/** Go somewhere inside the book and offer a way back to the page she was on. */
+function jumpTo(target) {
+  if (!R) return;
+  if (R.loc && R.loc.cfi && !R.backTo) R.backTo = R.loc.cfi;
+  $('#rBack').hidden = !R.backTo;
+  R.view.goTo(target);
+}
+
+function goBack() {
+  if (!R || !R.backTo) return;
+  const to = R.backTo;
+  R.backTo = null;
+  $('#rBack').hidden = true;
+  R.view.goTo(to);
+}
+
+/** A link that looks like a note reference: marked as one, or a small raised number or star. */
+function isNoteRef(a) {
+  const types = (a.getAttributeNS('http://www.idpf.org/2007/ops', 'type') || '').split(/\s+/);
+  const roles = (a.getAttribute('role') || '').split(/\s+/);
+  if (types.some(t => /noteref|glossref|biblioref/.test(t)) || roles.some(r => /doc-(noteref|glossref|biblioref)/.test(r))) return true;
+  if (types.includes('backlink') || roles.includes('doc-backlink')) return false;
+  const win = a.ownerDocument.defaultView;
+  const raised = el => !!el && (el.matches('sup') || /^(super|top|text-top)$/.test(win.getComputedStyle(el).verticalAlign));
+  if (raised(a) || raised(a.parentElement) || (a.children.length === 1 && raised(a.children[0]))) return true;
+  return /^\s*[\[(]?(\d{1,4}|[*†‡]+)[\])]?\s*$/.test(a.textContent || '');
+}
+
+/** The text a note reference points to, or '' if it is not a short note. */
+async function noteText(target) {
+  const book = R.view.book;
+  const section = book.sections[target.index];
+  if (!section || !section.createDocument) return '';
+  const doc = await section.createDocument();
+  let el = typeof target.anchor === 'function' ? target.anchor(doc) : null;
+  if (!el || el === doc.body || el === doc.documentElement) return '';
+  if (el.startContainer) el = el.startContainer.nodeType === 1 ? el.startContainer : el.startContainer.parentElement;
+  const inline = 'a, span, sup, sub, em, strong, i, b, small, big, cite';
+  const start = el;
+  while (el.matches && el.matches(inline) && el.parentElement && el.parentElement !== doc.body) el = el.parentElement;
+  // an empty anchor right before the note: the note is the next block
+  if (!(el.textContent || '').trim() || el === doc.body) el = start.nextElementSibling || el.nextElementSibling || el;
+  const blocks = [...el.querySelectorAll('p, li, dd, div:not(:has(p, li, div))')];
+  const parts = (blocks.length ? blocks : [el]).map(b => (b.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+  // FB2 notes start with their number as a title line: drop it
+  if (parts.length > 1 && /^[\[(]?\d{1,4}[\])]?\.?$|^[*†‡]+$/.test(parts[0])) parts.shift();
+  const text = parts.join('\n');
+  return text.length > 0 && text.length < 4000 ? text : '';
+}
+
+async function onLink(e) {
+  const { a, href } = e.detail;
+  e.preventDefault();
+  if (!R) return;
+  let target = null;
+  try { target = await R.view.book.resolveHref(href); } catch (err) { /* broken link */ }
+  if (!target) return;
+  if (isNoteRef(a)) {
+    let text = '';
+    try { text = await noteText(target); } catch (err) { /* fall back to jumping */ }
+    if (text) {
+      const label = (a.textContent || '').trim();
+      // the note usually repeats its own number at the start: «[6] Purse strings…»
+      text = text.replace(/^\s*[\[(]?(\d{1,4}|[*†‡]+)[\])]?\.?\s+/, '');
+      openSheet({
+        title: label && label.length <= 6 ? `Сноска ${label.replace(/[\[\]()]/g, '')}` : 'Сноска',
+        body: html`<div class="stack" style="gap:10px">${text.split('\n').map(t => html`<p style="font-family:var(--f-display);font-size:20px;line-height:1.4">${t}</p>`)}</div>
+<div class="row"><button class="btn quiet" data-act="goto">Открыть в книге</button><button class="btn primary" data-act="sheet-close">Закрыть</button></div>`,
+        acts: { goto: () => { closeSheet(); jumpTo(href); } },
+      });
+      return;
+    }
+  }
+  jumpTo(href);
+}
+
 const acts = {
   close: () => close(),
+  back: () => goBack(),
   toc: () => openToc(),
   progress: () => openProgress(),
   mark: () => toggleMark(),
@@ -605,9 +721,10 @@ async function open(id, { andListen = false, at = null } = {}) {
   }
   const hostMax = (host.prog && (host.prog.max || host.prog.f)) || 0;
   R = { host: hostId, id: hostId, part: null, parts: host.parts && host.parts.length ? host.parts : null, pin: hostId !== id ? id : null,
-    view, pages: host.pages || 1, tapAt: 0, max: hostMax, hostMax, lastF: null, acc: { p: 0, m: 0, l: 0 }, active: Date.now(), tickAt: Date.now(), settled: false, spoken: 0 };
-  view.renderer.addEventListener('relocate', e => onRelocate(e.detail.reason));
+    view, pages: host.pages || 1, tapAt: 0, sp: new Map(), rel: null, max: hostMax, hostMax, lastF: null, acc: { p: 0, m: 0, l: 0 }, active: Date.now(), tickAt: Date.now(), settled: false, spoken: 0 };
+  view.renderer.addEventListener('relocate', e => { if (R) R.rel = e.detail; onRelocate(e.detail.reason); });
   view.addEventListener('load', e => onLoad(e.detail));
+  view.addEventListener('link', onLink);
   view.addEventListener('create-overlay', drawQuotes);
   view.addEventListener('draw-annotation', e => e.detail.draw(Overlayer.highlight, { color: 'rgba(216,178,90,.45)' }));
   applyLook();

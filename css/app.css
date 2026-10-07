@@ -236,6 +236,8 @@ body.reading{background:var(--status-bg) !important}
 .pick button{min-height:56px;padding:0 16px;border-radius:14px;border:1px solid var(--line);background:var(--surface);display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:15px;text-align:left}
 .pick button.mid{justify-content:center}
 .pick button.on{border:2px solid var(--accent)}
+.r-back{position:absolute;left:16px;bottom:calc(44px + env(safe-area-inset-bottom,0px));z-index:3;min-height:44px;padding:0 16px 0 10px;border-radius:22px;background:var(--r-accent);color:var(--r-bg);font-weight:600;font-size:14px;display:flex;align-items:center;gap:4px;box-shadow:0 6px 20px rgba(0,0,0,.3)}
+.r-back svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .r-quote{position:absolute;left:50%;bottom:calc(84px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:3;min-height:44px;padding:0 18px;border-radius:22px;background:var(--r-accent);color:var(--r-bg);font-weight:600;font-size:14px;display:flex;align-items:center;gap:8px;box-shadow:0 6px 20px rgba(0,0,0,.3)}
 .r-quote svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .r-listen{position:absolute;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));z-index:4;background:var(--r-bg);border:1px solid var(--r-accent);border-radius:22px;padding:8px 10px;display:flex;flex-direction:column;gap:4px;box-shadow:0 8px 26px rgba(0,0,0,.35)}

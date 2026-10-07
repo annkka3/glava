@@ -8,7 +8,7 @@ export const COLLECTIONS = ['books', 'cols', 'days', 'quotes', 'meta'];
 const DEFAULTS = {
   theme: 'auto', // auto | light | dark
   goals: { pages: 30, minutes: 20, booksMonth: 2, booksYear: 24 },
-  reader: { theme: 'auto', font: 'serif', size: 19, line: 1.5, margin: 22, flow: 'paginated', justify: true, progress: 'chapter-pages' },
+  reader: { theme: 'auto', font: 'serif', size: 19, line: 1.5, margin: 22, flow: 'paginated', justify: true, progress: 'chapter-pages', pages: 'screen' },
   voice: 'ru_RU-irina-medium',
   rate: 1,
   lift: 0.35, // question tone added to voices that lack it: 0 | 0.35 | 0.6
