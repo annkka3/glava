@@ -5,3 +5,4 @@ private/
 *.log
 /test-results/
 /playwright-report/
+/tests/browser/fixtures/reading.epub
