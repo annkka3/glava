@@ -6,10 +6,15 @@
     "serve": "python3 -m http.server 8767",
     "vendor": "esbuild tools/firebase-entry.js --bundle --format=esm --minify --target=es2020 --outfile=vendor/firebase.js",
     "icons": "python3 tools/make_icons.py",
-    "sw": "python3 tools/make_sw.py"
+    "sw": "python3 tools/make_sw.py",
+    "test": "npm run test:unit",
+    "test:unit": "node --test tests/*.test.js",
+    "test:browser": "python3 tests/browser/fixtures/create-fixtures.py && playwright test",
+    "test:browser:list": "playwright test --list"
   },
   "devDependencies": {
     "@diffusionstudio/piper-wasm": "1.0.0",
+    "@playwright/test": "1.65.1",
     "onnxruntime-web": "1.30.0"
   }
 }

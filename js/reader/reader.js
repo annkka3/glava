@@ -11,6 +11,9 @@ import { makeBook } from '../../vendor/foliate-js/view.js';
 import { Overlayer } from '../../vendor/foliate-js/overlayer.js';
 import { Speaker, unlock } from './speak.js';
 import { scan, partAt } from './omnibus.js';
+import { WordReader } from './rsvp.js';
+import { readingSettings } from './reading-text.js';
+import { createWordModeUI } from './rsvp-ui.js';
 
 const THEMES = {
   paper: { name: 'Бумага', bg: '#F4EEDD', fg: '#1E2B26', muted: '#5F6A63', accent: '#7A5C12', line: 'rgba(122,92,18,.3)', dark: false },
@@ -141,6 +144,7 @@ function applyLook() {
   if (meta) meta.content = th.bg;
   document.documentElement.style.setProperty('--status-bg', th.bg);
   document.body.classList.add('reading');
+  if (R.wordUI) R.wordUI.setLook({ family: fontOf(r)[1] || FONTS.literata[1], size: r.size, dark: th.dark });
 }
 
 // ---------- shell ----------
@@ -149,6 +153,7 @@ const shell = b => html`
 <div class="r-bar r-top">
   <button data-r="close" aria-label="Закрыть книгу">${ICON.back}</button>
   <div class="ttl">${b.title}</div>
+  <button data-r="words" id="rWordsToggle" class="r-words-toggle" aria-label="Читать по словам" aria-pressed="false">По словам</button>
   <button data-r="mark" id="rMark" aria-label="Закладка" aria-pressed="false">${RICON.mark}</button>
   <button data-r="toc" aria-label="Оглавление, закладки и поиск">${RICON.list}</button>
   <button data-r="look" aria-label="Настройки чтения" style="font-family:var(--f-display);font-size:21px;font-weight:600">Аа</button>
@@ -160,7 +165,11 @@ const shell = b => html`
   <span class="r-meta" id="rPage"></span>
 </div>
 <button class="r-back" id="rBack" data-r="back" hidden>${ICON.back}Вернуться</button>
-<button class="r-quote" id="rQuote" data-r="quote" hidden>${ICON.quote}Сохранить цитату</button>
+<div class="r-selection-actions" id="rSelectionActions" hidden>
+  <button id="rQuote" data-r="quote">${ICON.quote}Сохранить цитату</button>
+  <button data-r="words-from-selection">Читать по словам отсюда</button>
+</div>
+<div id="rWordsPane" hidden></div>
 <div class="r-done card" id="rDone" hidden>
   <p class="h3">Книга дочитана?</p>
   <div class="row"><button class="btn primary" data-r="finish">Да, дочитала</button><button class="btn" data-r="not-yet">Ещё нет</button></div>
@@ -229,10 +238,10 @@ function paint() {
 
 // ---------- progress, pages, minutes ----------
 
-function flush() {
+function flush(force = false) {
   if (!R) return;
   const a = R.acc;
-  if (a.p >= 0.05 || a.m >= 0.05) {
+  if (a.p >= 0.05 || a.m >= 0.05 || (force && (a.p > 0 || a.m > 0 || a.l > 0))) {
     M.logReading({ bookId: R.id, pages: a.p, minutes: a.m, listen: a.l });
     R.acc = { p: 0, m: 0, l: 0 };
   }
@@ -240,13 +249,16 @@ function flush() {
 
 function save() {
   if (!R || !R.loc) return;
-  flush();
-  const f = R.loc.fraction || 0, t = Date.now();
+  collectWordTime();
+  flush(true);
+  const exact = R.precise;
+  const f = exact ? exact.f : R.loc.fraction || 0, t = Date.now();
+  const cfi = exact ? exact.cfi : R.loc.cfi;
   R.hostMax = Math.max(R.hostMax, f);
-  store.patch('books', R.host, { prog: { f, cfi: R.loc.cfi, max: R.hostMax, t }, touched: t });
+  store.patch('books', R.host, { prog: { f, cfi, max: R.hostMax, readMax: R.hostReadMax, word: exact || null, t }, touched: t });
   if (R.part) {
     const p = R.part, at = x => Math.min(1, Math.max(0, (x - p.from) / (p.to - p.from)));
-    store.patch('books', R.id, { prog: { f: at(f), cfi: R.loc.cfi, max: at(R.max), t }, touched: t });
+    store.patch('books', R.id, { prog: { f: at(f), cfi, max: at(R.max), readMax: at(R.readMax), word: exact || null, t }, touched: t });
   }
 }
 const saveSoon = debounce(save, 5000);
@@ -255,12 +267,20 @@ function onRelocate(reason) {
   if (!R) return;
   const loc = R.view.lastLocation;
   if (!loc) return;
-  R.loc = loc;
-  const f = loc.fraction || 0;
+  if (R.words || R.wordSwitching) { R.pageLocation = loc; return; }
+  const pageFraction = loc.fraction || 0;
   const user = reason === 'page' || reason === 'snap' || reason === 'scroll';
+  const voiceMove = reason === 'navigation' && R.speaker?.playing && Date.now() - R.speaker.selfMove < 700;
   // Every touch ends with a 'snap' back onto the page, even a tap that turned nothing:
   // only a real move to another page may hide the bars or move the voice.
-  const moved = R.lastF == null || Math.abs(f - R.lastF) > 1e-6;
+  const moved = R.lastF == null || Math.abs(pageFraction - R.lastF) > 1e-6;
+  // Foliate also uses 'navigation' for an ordinary page turn across a chapter
+  // boundary. Explicit seeks and initial loading are guarded for their whole
+  // asynchronous operation, so those never become reading progress.
+  const readingMove = !R.seeking && ((user && moved) || voiceMove || (reason === 'navigation' && moved && R.settled));
+  if (readingMove && R.settled) R.precise = null;
+  R.loc = R.precise ? { ...loc, fraction: R.precise.f, cfi: R.precise.cfi } : loc;
+  const f = R.loc.fraction || 0;
   if (R.parts) {
     let part = partAt(R.parts, f);
     if (R.pin) {
@@ -270,20 +290,24 @@ function onRelocate(reason) {
       if (pinned && f < pinned.to && f > pinned.from - 1.5 / R.pages) part = pinned; else R.pin = null;
     }
     const wid = part ? part.id : R.host;
-    if (wid !== R.id) enter(wid, part, f);
+    if (wid !== R.id) enter(wid, part, f, readingMove);
     const w = store.books.get(R.id);
     if (user && part && w && (w.status === 'want' || w.status === 'paused')) setStatus(R.id, 'reading');
   }
   if (f > R.max) {
     const pages = (f - R.max) * R.pages;
-    if (R.settled && pages <= 4) R.acc.p += pages; // a jump through the contents is not reading
+    if (R.settled && readingMove && pages <= 4) {
+      R.acc.p += pages; // opening, layout changes and jumps are not reading
+      R.readMax = Math.max(R.readMax, f);
+      R.hostReadMax = Math.max(R.hostReadMax, f);
+    }
     R.max = f;
   }
   R.settled = true;
   R.active = Date.now();
   paint();
   saveSoon();
-  R.lastF = f;
+  R.lastF = pageFraction;
   if (user && moved && R.speaker && R.speaker.playing) R.speaker.sync();
   if (user && moved && reason !== 'scroll') chrome(false);
   if (f >= 0.995 && !R.asked && store.books.get(R.id).status !== 'read') { R.asked = true; $('#rDone').hidden = false; }
@@ -333,11 +357,12 @@ function openProgress() {
 }
 
 /** Move the credit to another work of a collected volume (or back to the volume itself). */
-function enter(wid, part, f) {
-  flush();
+function enter(wid, part, f, complete = true) {
+  collectWordTime();
+  flush(true);
   const prev = R.part;
   // Reading straight on across the end of a work finishes it.
-  if (prev && R.settled && R.lastF != null && f >= prev.to - 0.5 / R.pages && f - R.lastF < 4 / R.pages && f > R.lastF) {
+  if (complete && prev && R.settled && R.lastF != null && f >= prev.to - 0.5 / R.pages && f - R.lastF < 4 / R.pages && f > R.lastF) {
     const done = store.books.get(prev.id);
     if (done && done.status !== 'read') { setStatus(prev.id, 'read'); toast(`Дочитано: ${done.title}`); }
   }
@@ -345,6 +370,8 @@ function enter(wid, part, f) {
   R.part = part;
   const w = store.books.get(wid);
   R.max = part ? part.from + ((w.prog && w.prog.max) || 0) * (part.to - part.from) : R.hostMax;
+  const readMax = w && w.prog && (w.prog.readMax ?? w.prog.max) || 0;
+  R.readMax = part ? part.from + readMax * (part.to - part.from) : R.hostReadMax;
   R.asked = false;
   const ttl = $('#reader .ttl');
   if (ttl && w) ttl.textContent = w.title;
@@ -355,16 +382,216 @@ function tick() {
   if (!R) return;
   const now = Date.now(), dt = Math.min(60, (now - R.tickAt) / 1000) / 60;
   R.tickAt = now;
+  if (R.words) {
+    collectWordTime();
+    if (R.acc.m >= 1 || R.acc.p >= 1) flush();
+    return;
+  }
   const sp = R.speaker;
   if (sp && sp.playing) {
     const played = sp.playedSec;
     const min = Math.max(0, played - R.spoken) / 60 / (sp.player.rate || 1);
     R.spoken = played;
     R.acc.m += min; R.acc.l += min;
-  } else if (!document.hidden && now - R.active < 120000) {
+  } else if (!R.wordSwitching && !document.hidden && now - R.active < 120000) {
     R.acc.m += dt;
   }
   if (R.acc.m >= 1 || R.acc.p >= 1) flush();
+}
+
+// ---------- one word at a time ----------
+
+function wordSettings() {
+  const r = store.settings.reader;
+  return readingSettings({ wpm: r.wordSpeed, focus: r.wordFocus, punctuation: r.wordPauses, longWords: r.wordLong });
+}
+
+// This clock belongs to playback, so time in settings, on pause, or in the
+// background never becomes reading time. Read events account for text only.
+function collectWordTime() {
+  if (!R || !R.words) return;
+  const elapsed = R.words.activeMs;
+  R.acc.m += Math.max(0, elapsed - R.wordTimeMs) / 60000;
+  R.wordTimeMs = elapsed;
+}
+
+function renderWords() {
+  if (!R || !R.wordUI || !R.words) return;
+  R.wordUI.update({ word: R.words.current, state: R.words.state, settings: R.words.settings, error: R.wordError });
+}
+
+function shownWord(word) {
+  const f = word.fraction;
+  if (R.parts) {
+    let part = partAt(R.parts, f);
+    if (R.pin) {
+      const pinned = R.parts.find(x => x.id === R.pin);
+      if (pinned && f >= pinned.from - 1.5 / R.pages && f < pinned.to) part = pinned;
+      else R.pin = null;
+    }
+    const wid = part ? part.id : R.host;
+    if (wid !== R.id) {
+      save();
+      enter(wid, part, f, R.wordLastReadEnd != null && f >= R.wordLastReadEnd && f - R.wordLastReadEnd < 4 / R.pages);
+    }
+  }
+  R.precise = { cfi: word.cfi, f, sectionIndex: word.sectionIndex, wordIndex: word.wordIndex };
+  R.loc = { ...R.loc, cfi: word.cfi, fraction: f, range: null, tocItem: { label: word.chapter } };
+  R.lastF = f;
+  R.settled = true;
+  renderWords();
+  // A debounce would never fire during continuous playback. Save at most every
+  // five seconds, plus every pause/exit, including the exact visible word.
+  if (Date.now() - R.wordSavedAt >= 5000) { save(); R.wordSavedAt = Date.now(); }
+}
+
+function readWord({ from, to, characters }) {
+  if (!R) return;
+  const book = store.books.get(R.id);
+  if (book && (book.status === 'want' || book.status === 'paused')) setStatus(R.id, 'reading');
+  const span = to - from;
+  const fresh = span > 0 ? Math.max(0, Math.min(1, (to - Math.max(from, R.readMax)) / span)) : 0;
+  R.acc.p += characters * fresh / M.PAGE_CHARS;
+  R.readMax = Math.max(R.readMax, to);
+  R.hostReadMax = Math.max(R.hostReadMax, to);
+  R.max = Math.max(R.max, to);
+  R.hostMax = Math.max(R.hostMax, to);
+  R.wordLastReadEnd = to;
+}
+
+function pauseWords() {
+  if (!R || !R.words) return;
+  R.words.pause();
+  save();
+}
+
+async function startWords(cfi = null) {
+  if (!R || R.wordSwitching) return;
+  if (R.words) { await exitWords(); return; }
+  if (R.view.book.rendition?.layout === 'pre-paginated') {
+    toast('У этой книги фиксированная вёрстка. Продолжи на обычной странице.');
+    return;
+  }
+  const session = R;
+  tick();
+  stopListening();
+  closeSheet();
+  R.sel = null;
+  R.view.deselect();
+  R.wordTimeMs = 0;
+  R.wordSavedAt = 0;
+  R.wordLastReadEnd = null;
+  R.wordError = null;
+  R.wordExitTarget = null;
+  const pane = $('#rWordsPane'), el = $('#reader');
+  R.wordUI = createWordModeUI(pane, {
+    onAction: action => {
+      if (R !== session || !R.words) return;
+      if (action === 'exit') exitWords();
+      else if (action === 'toggle') R.words.toggle();
+      else {
+        R.wordLastReadEnd = null;
+        const moving = action === 'back' ? R.words.back(10) : R.words.previousSentence();
+        Promise.resolve(moving).then(() => { if (R === session) save(); });
+      }
+    },
+    onSettings: patch => {
+      if (R !== session || !R.words) return;
+      R.words.setSettings(patch);
+      const s = R.words.settings;
+      store.setSettings({ reader: { wordSpeed: s.wpm, wordFocus: s.focus, wordPauses: s.punctuation, wordLong: s.longWords } });
+      renderWords();
+    },
+  });
+  R.words = new WordReader(R.view, {
+    settings: wordSettings(),
+    onWord: word => { if (R === session) shownWord(word); },
+    onRead: word => { if (R === session) readWord(word); },
+    onState: state => {
+      if (R !== session) return;
+      if (state === 'playing') {
+        const b = store.books.get(R.id);
+        if (b && (b.status === 'want' || b.status === 'paused')) setStatus(R.id, 'reading');
+      } else if (state === 'paused' || state === 'ended' || state === 'error') save();
+      renderWords();
+    },
+    onError: error => {
+      if (R !== session) return;
+      R.wordError = error.message;
+      R.wordExitTarget = error.cfi || null;
+      renderWords();
+    },
+    onEnd: () => {
+      if (R !== session || R.asked || store.books.get(R.id)?.status === 'read') return;
+      R.asked = true;
+      $('#rDone').hidden = false;
+    },
+  });
+  el.classList.add('rsvp-active');
+  pane.hidden = false;
+  R.view.inert = true;
+  R.view.setAttribute('aria-hidden', 'true');
+  $('#rSelectionActions').hidden = true;
+  $('#rDone').hidden = true;
+  $('#rWordsToggle').setAttribute('aria-pressed', 'true');
+  chrome(true);
+  const r = store.settings.reader;
+  R.wordUI.setLook({ family: fontOf(r)[1] || FONTS.literata[1], size: r.size, dark: themeOf(r).dark });
+  renderWords();
+  const engine = R.words;
+  await engine.open(cfi || R.precise?.cfi || null);
+  if (R === session && R.words === engine) pane.focus({ preventScroll: true });
+}
+
+function highlightWord(cfi) {
+  if (!R || !cfi) return;
+  try {
+    const target = R.view.resolveCFI(cfi);
+    const shown = R.view.renderer.getContents().find(x => x.index === target.index);
+    if (!shown?.overlayer || typeof target.anchor !== 'function') return;
+    const range = target.anchor(shown.doc);
+    shown.overlayer.remove('rsvp-resume');
+    shown.overlayer.add('rsvp-resume', range, Overlayer.highlight, { color: 'rgba(216,178,90,.65)' });
+    clearTimeout(R.wordHighlightTimer);
+    R.wordHighlightTimer = setTimeout(() => shown.overlayer.remove('rsvp-resume'), 2500);
+  } catch (_) { /* The saved CFI still positions the page if no overlay is available. */ }
+}
+
+async function exitWords({ navigate = true } = {}) {
+  if (!R || !R.words) return;
+  const session = R;
+  R.words.pause();
+  save();
+  const target = R.wordExitTarget || R.precise?.cfi;
+  const unsupported = !!R.wordExitTarget;
+  const ended = R.words.state === 'ended';
+  R.wordSwitching = true;
+  R.words.destroy();
+  R.words = null;
+  R.wordUI.destroy();
+  R.wordUI = null;
+  R.view.inert = false;
+  R.view.removeAttribute('aria-hidden');
+  $('#rWordsPane').hidden = true;
+  $('#reader').classList.remove('rsvp-active');
+  $('#rWordsToggle').setAttribute('aria-pressed', 'false');
+  chrome(true);
+  if (navigate && target) await R.view.goTo(target);
+  if (R !== session) return;
+  if (navigate) {
+    const loc = R.view.lastLocation;
+    if (unsupported) R.precise = null;
+    if (loc) R.loc = R.precise ? { ...loc, fraction: R.precise.f, cfi: R.precise.cfi } : loc;
+    R.lastF = loc?.fraction ?? null;
+    paint();
+    if (!unsupported) highlightWord(target);
+    if (ended && !R.asked && store.books.get(R.id)?.status !== 'read') { R.asked = true; $('#rDone').hidden = false; }
+    $('#rWordsToggle').focus({ preventScroll: true });
+  }
+  R.active = R.tickAt = Date.now();
+  R.wordSwitching = false;
+  if (navigate && unsupported) { R.settled = false; onRelocate('navigation'); }
+  save();
 }
 
 // ---------- quotes ----------
@@ -379,17 +606,17 @@ function drawQuotes() {
 
 function onLoad({ doc, index }) {
   doc.addEventListener('selectionchange', debounce(() => {
-    if (!R) return;
+    if (!R || R.words || R.wordSwitching) return;
     const sel = doc.getSelection();
-    const ok = sel && sel.rangeCount && !sel.isCollapsed && sel.toString().trim().length > 2;
+    const ok = sel && sel.rangeCount && !sel.isCollapsed && sel.toString().trim().length > 0;
     R.sel = ok ? { range: sel.getRangeAt(0).cloneRange(), text: sel.toString().replace(/\s+/g, ' ').trim(), index } : null;
-    $('#rQuote').hidden = !ok;
+    $('#rSelectionActions').hidden = !ok;
   }, 250));
   // A tap is taken from whichever arrives first: the click (what iPhone sends for a tap) or a short,
   // still pointer touch (for places where no click comes). The other one of the pair is ignored.
   let down = null;
   const onTap = (cx, cy, target) => {
-    if (!R || Date.now() - R.tapAt < 450) return;
+    if (!R || R.words || R.wordSwitching || Date.now() - R.tapAt < 450) return;
     if (target && target.closest && target.closest('a[href]')) return;
     const sel = doc.getSelection();
     if (sel && !sel.isCollapsed) return;
@@ -414,7 +641,7 @@ function onLoad({ doc, index }) {
 }
 
 function onKey(e) {
-  if (!R || $('#sheet').open) return;
+  if (!R || R.words || R.wordSwitching || e.defaultPrevented || $('#sheet').open) return;
   if (e.key === 'ArrowLeft' || e.key === 'PageUp') { R.view.prev(); e.preventDefault(); }
   else if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') { R.view.next(); e.preventDefault(); }
   else if (e.key === 'Escape') close();
@@ -432,6 +659,9 @@ function listenUI(state) {
 
 async function listen() {
   if (!R) return;
+  const session = R;
+  if (R.words) await exitWords();
+  if (R !== session) return;
   if (R.speaker) { R.speaker.toggle(); return; }
   const b = store.books.get(R.id), s = store.settings;
   const rate = store.books.get(R.host).speed || s.rate || 1;
@@ -502,6 +732,7 @@ ${step('line', 'Межстрочный интервал', r.line, String(r.line)
 }
 
 function openLook() {
+  pauseWords();
   const set = patch => { store.setSettings({ reader: patch }); applyLook(); updateSheet(lookBody()); };
   openSheet({
     title: 'Вид страницы', body: lookBody(),
@@ -527,10 +758,11 @@ function markAt(f) {
 
 function toggleMark() {
   if (!R.loc) return;
+  pauseWords();
   const b = store.books.get(R.host), marks = [...(b.marks || [])], f = R.loc.fraction || 0, i = markAt(f);
   if (i >= 0) marks.splice(i, 1);
   else {
-    const here = R.loc.range ? R.loc.range.toString().replace(/\s+/g, ' ').trim().slice(0, 90) : '';
+    const here = (R.words?.current?.context || (R.loc.range ? R.loc.range.toString() : '')).replace(/\s+/g, ' ').trim().slice(0, 90);
     marks.push({ cfi: R.loc.cfi, f, at: today(), label: (R.loc.tocItem && R.loc.tocItem.label || '').trim(), text: here });
     marks.sort((a, c) => a.f - c.f);
   }
@@ -562,6 +794,7 @@ async function runSearch(query) {
 }
 
 function openToc() {
+  pauseWords();
   const flat = [];
   const walk = (items, depth) => { for (const it of items || []) { flat.push({ ...it, depth }); walk(it.subitems, depth + 1); } };
   walk(R.view.book.toc, 0);
@@ -593,11 +826,28 @@ ${mine.length ? html`<section class="stack" style="gap:4px"><p class="eyebrow">�
 // ---------- links and footnotes ----------
 
 /** Go somewhere inside the book and offer a way back to the page she was on. */
-function jumpTo(target) {
+async function jumpTo(target) {
   if (!R) return;
+  const session = R;
+  if (R.words) await exitWords();
+  if (R !== session) return;
   if (R.loc && R.loc.cfi && !R.backTo) R.backTo = R.loc.cfi;
   $('#rBack').hidden = !R.backTo;
-  R.view.goTo(target);
+  await seekTo(target);
+}
+
+async function seekTo(target, fraction = false) {
+  if (!R) return;
+  const session = R;
+  R.precise = null;
+  R.settled = false;
+  R.seeking = true;
+  try {
+    if (fraction) await R.view.goToFraction(target);
+    else await R.view.goTo(target);
+  } finally {
+    if (R === session) { R.seeking = false; save(); }
+  }
 }
 
 function goBack() {
@@ -605,7 +855,7 @@ function goBack() {
   const to = R.backTo;
   R.backTo = null;
   $('#rBack').hidden = true;
-  R.view.goTo(to);
+  seekTo(to);
 }
 
 /** A link that looks like a note reference: marked as one, or a small raised number or star. */
@@ -670,6 +920,10 @@ async function onLink(e) {
 
 const acts = {
   close: () => close(),
+  words: () => startWords(),
+  'words-from-selection': () => {
+    if (R.sel) startWords(R.view.getCFI(R.sel.index, R.sel.range));
+  },
   back: () => goBack(),
   toc: () => openToc(),
   progress: () => openProgress(),
@@ -683,7 +937,7 @@ const acts = {
     R.view.addAnnotation({ value: cfi }).catch(() => {});
     R.view.deselect();
     R.sel = null;
-    $('#rQuote').hidden = true;
+    $('#rSelectionActions').hidden = true;
     toast('Цитата сохранена');
   },
   finish: () => { setStatus(R.id, 'read'); $('#rDone').hidden = true; toast('Книга дочитана'); },
@@ -708,7 +962,7 @@ async function open(id, { andListen = false, at = null } = {}) {
   const el = $('#reader');
   setHTML(el, shell(b));
   el.hidden = false;
-  el.classList.remove('chrome-off');
+  el.classList.remove('chrome-off', 'rsvp-active');
   const view = document.createElement('foliate-view');
   el.insertBefore(view, $('#rFoot'));
   try {
@@ -720,8 +974,12 @@ async function open(id, { andListen = false, at = null } = {}) {
     return;
   }
   const hostMax = (host.prog && (host.prog.max || host.prog.f)) || 0;
+  const hostReadMax = host.prog?.readMax ?? host.prog?.max ?? 0;
+  const savedWord = (hostId !== id ? b : host).prog?.word;
   R = { host: hostId, id: hostId, part: null, parts: host.parts && host.parts.length ? host.parts : null, pin: hostId !== id ? id : null,
-    view, pages: host.pages || 1, tapAt: 0, sp: new Map(), rel: null, max: hostMax, hostMax, lastF: null, acc: { p: 0, m: 0, l: 0 }, active: Date.now(), tickAt: Date.now(), settled: false, spoken: 0 };
+    view, pages: host.pages || 1, tapAt: 0, sp: new Map(), rel: null, max: hostMax, hostMax, readMax: hostReadMax, hostReadMax,
+    precise: !at && savedWord?.cfi && Number.isFinite(savedWord.f) ? savedWord : null,
+    words: null, wordUI: null, wordSwitching: false, wordTimeMs: 0, seeking: true, lastF: null, acc: { p: 0, m: 0, l: 0 }, active: Date.now(), tickAt: Date.now(), settled: false, spoken: 0 };
   view.renderer.addEventListener('relocate', e => { if (R) R.rel = e.detail; onRelocate(e.detail.reason); });
   view.addEventListener('load', e => onLoad(e.detail));
   view.addEventListener('link', onLink);
@@ -729,8 +987,10 @@ async function open(id, { andListen = false, at = null } = {}) {
   view.addEventListener('draw-annotation', e => e.detail.draw(Overlayer.highlight, { color: 'rgba(216,178,90,.45)' }));
   applyLook();
   await view.init({ lastLocation: at || (hostId !== id ? ((b.prog && b.prog.cfi) || b.src.href) : (host.prog && host.prog.cfi)), showTextStart: true });
+  R.seeking = false;
   if (!R.parts && (b.status === 'want' || b.status === 'paused')) setStatus(id, 'reading');
   R.timer = setInterval(tick, 15000);
+  if (R.precise) highlightWord(R.precise.cfi);
   if (andListen) listen();
 }
 
@@ -740,8 +1000,10 @@ function close() {
   if (!R) return;
   stopListening();
   tick();
+  if (R.words) exitWords({ navigate: false });
   save();
   clearInterval(R.timer);
+  clearTimeout(R.wordHighlightTimer);
   try { R.view.close(); } catch (e) { /* already gone */ }
   R = null;
   const el = $('#reader');
@@ -760,8 +1022,15 @@ export function install(hooks) {
     const b = e.target.closest('[data-r]');
     if (b && R && acts[b.dataset.r]) acts[b.dataset.r](b);
   });
-  el.addEventListener('change', e => { if (e.target.id === 'rSlider' && R) R.view.goToFraction(+e.target.value / 1000); });
+  el.addEventListener('change', e => {
+    if (e.target.id === 'rSlider' && R && !R.words) {
+      seekTo(+e.target.value / 1000, true);
+    }
+  });
   document.addEventListener('keydown', e => { if (R && !e.target.closest('input,textarea,select')) onKey(e); });
-  document.addEventListener('visibilitychange', () => { if (document.hidden && R) { tick(); save(); } });
-  window.addEventListener('pagehide', () => { if (R) { tick(); save(); } });
+  document.addEventListener('visibilitychange', () => { if (document.hidden && R) { pauseWords(); tick(); save(); } });
+  window.addEventListener('pagehide', () => { if (R) { pauseWords(); tick(); save(); } });
+  // A native dialog or a switch to another window pauses the word stream too.
+  window.addEventListener('blur', pauseWords);
+  new MutationObserver(() => { if ($('#sheet').open) pauseWords(); }).observe($('#sheet'), { attributes: true, attributeFilter: ['open'] });
 }

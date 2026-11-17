@@ -3,3 +3,6 @@ private/
 .claude/
 .DS_Store
 *.log
+/test-results/
+/playwright-report/
+/tests/browser/fixtures/reading.epub
