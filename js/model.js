@@ -6,6 +6,9 @@ import { today, addDays, parse, toStr, daysInMonth, daysBetween, fmtDay } from '
 /** One "page" of an e-book: the amount of text on a typical paper page. */
 export const PAGE_CHARS = 1800;
 const r1 = n => Math.round(n * 10) / 10;
+// Keep small reading increments: rounding every autosave to a tenth inflates minutes.
+// Presentation still uses the existing rounded counters.
+const readingTotal = n => Math.max(0, Math.round(n * 1000000) / 1000000);
 
 // ---------- days ----------
 
@@ -20,9 +23,9 @@ export function logReading({ date = today(), bookId, pages = 0, minutes = 0, lis
   const d = day(date), b = { ...d.b };
   if (bookId) {
     const cur = b[bookId] || {};
-    b[bookId] = { p: r1((cur.p || 0) + pages), m: r1((cur.m || 0) + minutes), l: r1((cur.l || 0) + listen) };
+    b[bookId] = { p: readingTotal((cur.p || 0) + pages), m: readingTotal((cur.m || 0) + minutes), l: readingTotal((cur.l || 0) + listen) };
   }
-  store.put('days', date, { p: Math.max(0, r1(d.p + pages)), m: Math.max(0, r1(d.m + minutes)), l: Math.max(0, r1(d.l + listen)), b });
+  store.put('days', date, { p: readingTotal(d.p + pages), m: readingTotal(d.m + minutes), l: readingTotal(d.l + listen), b });
 }
 
 export function dayState(date) {
