@@ -43,7 +43,9 @@ Production registers its service worker automatically on HTTPS. For the local
 test origin, the test explicitly registers the same `sw.js`; `localhost` is a
 secure context. It does not change or mock the worker's fetch/cache implementation.
 
-Fixtures contain original test prose only. Regenerate both books deterministically:
+Fixtures contain original test prose only. `npm run test:browser` regenerates both
+books deterministically before Playwright starts, locally and in GitHub Actions.
+The binary EPUB is generated rather than stored in Git. To regenerate manually:
 
 ```sh
 python3 tests/browser/fixtures/create-fixtures.py

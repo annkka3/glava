@@ -9,7 +9,7 @@
     "sw": "python3 tools/make_sw.py",
     "test": "npm run test:unit",
     "test:unit": "node --test tests/*.test.js",
-    "test:browser": "playwright test",
+    "test:browser": "python3 tests/browser/fixtures/create-fixtures.py && playwright test",
     "test:browser:list": "playwright test --list"
   },
   "devDependencies": {
